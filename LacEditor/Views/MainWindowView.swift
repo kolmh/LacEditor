@@ -5,6 +5,7 @@ struct MainWindowView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     @State private var isDropTargeted = false
+    @State private var loadedDocumentIDs: Set<UUID> = []
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -69,6 +70,19 @@ struct MainWindowView: View {
             }
             return accepted
         }
+        .onAppear {
+            if let selectedID = appState.selectedDocumentID {
+                loadedDocumentIDs.insert(selectedID)
+            }
+        }
+        .onChange(of: appState.selectedDocumentID) { _, selectedID in
+            if let selectedID {
+                loadedDocumentIDs.insert(selectedID)
+            }
+        }
+        .onChange(of: appState.documents.map(\.id)) { _, documentIDs in
+            loadedDocumentIDs.formIntersection(documentIDs)
+        }
     }
 
     @ViewBuilder
@@ -76,38 +90,76 @@ struct MainWindowView: View {
         VStack(spacing: 0) {
             TabBarView()
             Divider()
-            if let document = appState.selectedDocument {
-                if document.language == .markdown && document.isPreviewVisible {
-                    HSplitView {
-                        EditorTextView(
+            if let selectedDocument = appState.selectedDocument {
+                ZStack {
+                    ForEach(loadedDocuments) { document in
+                        DocumentEditorPane(
                             document: document,
+                            isActive: document.id == selectedDocument.id,
                             fontSize: appState.editorFontSize,
                             wordWrap: appState.isWordWrapEnabled,
-                            showsLineNumbers: appState.isLineNumbersVisible
-                        )
-                        .frame(minWidth: 300)
-
-                        MarkdownPreview(
-                            markdown: document.text,
+                            showsLineNumbers: appState.isLineNumbersVisible,
                             darkMode: colorScheme == .dark
                         )
-                        .frame(minWidth: 280)
+                        .opacity(document.id == selectedDocument.id ? 1 : 0)
+                        .allowsHitTesting(document.id == selectedDocument.id)
+                        .accessibilityHidden(document.id != selectedDocument.id)
+                        .zIndex(document.id == selectedDocument.id ? 1 : 0)
                     }
-                } else {
-                    EditorTextView(
-                        document: document,
-                        fontSize: appState.editorFontSize,
-                        wordWrap: appState.isWordWrapEnabled,
-                        showsLineNumbers: appState.isLineNumbersVisible
-                    )
                 }
+                .animation(nil, value: appState.selectedDocumentID)
+
                 if appState.isStatusBarVisible {
                     Divider()
-                    StatusBarView(document: document)
+                    StatusBarView(document: selectedDocument)
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
         }
         .animation(.easeInOut(duration: 0.18), value: appState.isStatusBarVisible)
+    }
+
+    private var loadedDocuments: [EditorDocument] {
+        appState.documents.filter {
+            loadedDocumentIDs.contains($0.id) || $0.id == appState.selectedDocumentID
+        }
+    }
+}
+
+private struct DocumentEditorPane: View {
+    @ObservedObject var document: EditorDocument
+    let isActive: Bool
+    let fontSize: CGFloat
+    let wordWrap: Bool
+    let showsLineNumbers: Bool
+    let darkMode: Bool
+
+    var body: some View {
+        Group {
+            if document.language == .markdown && document.isPreviewVisible {
+                HSplitView {
+                    editor
+                        .frame(minWidth: 300)
+
+                    MarkdownPreview(
+                        markdown: document.text,
+                        darkMode: darkMode
+                    )
+                    .frame(minWidth: 280)
+                }
+            } else {
+                editor
+            }
+        }
+    }
+
+    private var editor: some View {
+        EditorTextView(
+            document: document,
+            fontSize: fontSize,
+            wordWrap: wordWrap,
+            showsLineNumbers: showsLineNumbers,
+            isActive: isActive
+        )
     }
 }

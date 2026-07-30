@@ -5,14 +5,17 @@ struct TabBarView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var windowManager: WindowManager
     @State private var draggedDocumentID: UUID?
+    @State private var dragTargetDocumentID: UUID?
+    @State private var dragTranslationX: CGFloat = 0
     @State private var tabFrames: [UUID: CGRect] = [:]
-    @State private var tabContentFrame: CGRect = .zero
-    @State private var tabViewportWidth: CGFloat = 0
+    @State private var dragStartFrames: [UUID: CGRect] = [:]
+    @State private var canScrollLeading = false
+    @State private var canScrollTrailing = false
 
     var body: some View {
         HStack(spacing: 0) {
             ScrollViewReader { proxy in
-                GeometryReader { viewport in
+                GeometryReader { _ in
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 0) {
                             ForEach(appState.documents) { document in
@@ -24,6 +27,17 @@ struct TabBarView: View {
                                     close: { appState.close(document) }
                                 )
                                 .id(document.id)
+                                .offset(x: tabOffset(for: document.id))
+                                .zIndex(draggedDocumentID == document.id ? 2 : 0)
+                                .shadow(
+                                    color: .black.opacity(draggedDocumentID == document.id ? 0.12 : 0),
+                                    radius: 5,
+                                    y: 2
+                                )
+                                .animation(
+                                    .interactiveSpring(response: 0.2, dampingFraction: 0.86),
+                                    value: dragTargetDocumentID
+                                )
                                 .transition(.asymmetric(
                                     insertion: .offset(x: 12).combined(with: .opacity),
                                     removal: .scale(scale: 0.96).combined(with: .opacity)
@@ -54,37 +68,32 @@ struct TabBarView: View {
                             .smooth(duration: 0.24),
                             value: appState.documents.map(\.id)
                         )
-                        .background {
-                            GeometryReader { geometry in
-                                Color.clear.preference(
-                                    key: TabContentFramePreferenceKey.self,
-                                    value: geometry.frame(in: .named("tabScrollViewport"))
-                                )
-                            }
-                        }
                     }
                     .coordinateSpace(name: "tabScrollViewport")
-                    .overlay(HorizontalWheelScrollBridge())
+                    .overlay(
+                        HorizontalWheelScrollBridge(
+                            canScrollLeading: $canScrollLeading,
+                            canScrollTrailing: $canScrollTrailing
+                        )
+                    )
                     .overlay(alignment: .leading) {
-                        if tabContentFrame.minX < -0.5 {
+                        if canScrollLeading {
                             edgeFade(isLeading: true)
+                                .transition(.opacity)
                         }
                     }
                     .overlay(alignment: .trailing) {
-                        if tabContentFrame.maxX > tabViewportWidth + 0.5 {
+                        if canScrollTrailing {
                             edgeFade(isLeading: false)
+                                .transition(.opacity)
                         }
                     }
-                    .onAppear {
-                        tabViewportWidth = viewport.size.width
-                    }
-                    .onChange(of: viewport.size.width) { _, width in
-                        tabViewportWidth = width
-                    }
+                    .animation(.easeOut(duration: 0.14), value: canScrollLeading)
+                    .animation(.easeOut(duration: 0.14), value: canScrollTrailing)
                 }
                 .onChange(of: appState.selectedDocumentID) { _, selectedID in
                     guard let selectedID else { return }
-                    withAnimation(.easeOut(duration: 0.16)) {
+                    withAnimation(.easeOut(duration: 0.1)) {
                         proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
@@ -105,7 +114,6 @@ struct TabBarView: View {
         }
         .coordinateSpace(name: "tabBar")
         .onPreferenceChange(TabFramePreferenceKey.self) { tabFrames = $0 }
-        .onPreferenceChange(TabContentFramePreferenceKey.self) { tabContentFrame = $0 }
         .frame(height: 36)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
     }
@@ -113,13 +121,15 @@ struct TabBarView: View {
     private func edgeFade(isLeading: Bool) -> some View {
         LinearGradient(
             colors: [
-                Color(nsColor: .controlBackgroundColor),
+                Color(nsColor: .controlBackgroundColor).opacity(0.98),
+                Color(nsColor: .controlBackgroundColor).opacity(0.78),
+                Color(nsColor: .controlBackgroundColor).opacity(0.3),
                 Color(nsColor: .controlBackgroundColor).opacity(0)
             ],
             startPoint: isLeading ? .leading : .trailing,
             endPoint: isLeading ? .trailing : .leading
         )
-        .frame(width: 18)
+        .frame(width: 30)
         .allowsHitTesting(false)
     }
 
@@ -128,23 +138,94 @@ struct TabBarView: View {
             .onChanged { value in
                 if draggedDocumentID == nil {
                     draggedDocumentID = document.id
+                    dragStartFrames = tabFrames
+                    appState.selectedDocumentID = document.id
                 }
-                guard let targetID = tabFrames.first(where: {
-                    $0.value.contains(value.location)
-                })?.key, targetID != document.id else { return }
-                withAnimation(.easeOut(duration: 0.12)) {
-                    appState.moveDocument(document.id, relativeTo: targetID)
-                }
+                guard draggedDocumentID == document.id else { return }
+                dragTranslationX = value.translation.width
+                dragTargetDocumentID = nearestTab(to: value.location.x)
             }
             .onEnded { _ in
-                defer { draggedDocumentID = nil }
-                guard let window = appState.hostWindow else { return }
-                let mouseLocation = NSEvent.mouseLocation
-                guard !window.frame.insetBy(dx: -8, dy: -8).contains(mouseLocation) else {
-                    return
+                let targetID = dragTargetDocumentID
+                let shouldDetach: Bool
+                if let window = appState.hostWindow {
+                    shouldDetach = !window.frame
+                        .insetBy(dx: -12, dy: -12)
+                        .contains(NSEvent.mouseLocation)
+                } else {
+                    shouldDetach = false
                 }
-                windowManager.detach(document, from: appState)
+
+                if shouldDetach {
+                    withAnimation(.easeOut(duration: 0.1)) {
+                        clearDragState()
+                    }
+                    windowManager.detach(document, from: appState)
+                } else if let targetID, targetID != document.id {
+                    withAnimation(.smooth(duration: 0.18)) {
+                        appState.moveDocument(document.id, relativeTo: targetID)
+                        clearDragState()
+                    }
+                } else {
+                    withAnimation(.easeOut(duration: 0.1)) {
+                        clearDragState()
+                    }
+                }
             }
+    }
+
+    private func nearestTab(to horizontalLocation: CGFloat) -> UUID? {
+        let frames = dragStartFrames.isEmpty ? tabFrames : dragStartFrames
+        return frames.min {
+            abs($0.value.midX - horizontalLocation)
+                < abs($1.value.midX - horizontalLocation)
+        }?.key
+    }
+
+    private func clearDragState() {
+        draggedDocumentID = nil
+        dragTargetDocumentID = nil
+        dragTranslationX = 0
+        dragStartFrames = [:]
+    }
+
+    private func tabOffset(for documentID: UUID) -> CGFloat {
+        guard let draggedDocumentID,
+              let sourceIndex = appState.documents.firstIndex(where: {
+                  $0.id == draggedDocumentID
+              }),
+              let targetID = dragTargetDocumentID,
+              let targetIndex = appState.documents.firstIndex(where: {
+                  $0.id == targetID
+              }),
+              let sourceWidth = (
+                  dragStartFrames[draggedDocumentID]
+                  ?? tabFrames[draggedDocumentID]
+              )?.width
+        else {
+            return 0
+        }
+
+        if documentID == draggedDocumentID {
+            return dragTranslationX
+        }
+        guard let index = appState.documents.firstIndex(where: {
+            $0.id == documentID
+        }) else {
+            return 0
+        }
+
+        if sourceIndex < targetIndex,
+           index > sourceIndex,
+           index <= targetIndex {
+            return -sourceWidth
+        }
+        if targetIndex < sourceIndex,
+           index >= targetIndex,
+           index < sourceIndex {
+            return sourceWidth
+        }
+        return 0
     }
 }
 
@@ -225,24 +306,38 @@ private struct TabFramePreferenceKey: PreferenceKey {
     }
 }
 
-private struct TabContentFramePreferenceKey: PreferenceKey {
-    static var defaultValue = CGRect.zero
-
-    static func reduce(value: inout CGRect, nextValue: () -> CGRect) {
-        value = nextValue()
-    }
-}
-
 private struct HorizontalWheelScrollBridge: NSViewRepresentable {
+    @Binding var canScrollLeading: Bool
+    @Binding var canScrollTrailing: Bool
+
     func makeNSView(context: Context) -> HorizontalWheelMonitorView {
-        HorizontalWheelMonitorView()
+        let view = HorizontalWheelMonitorView()
+        configure(view)
+        return view
     }
 
-    func updateNSView(_ nsView: HorizontalWheelMonitorView, context: Context) {}
+    func updateNSView(_ nsView: HorizontalWheelMonitorView, context: Context) {
+        configure(nsView)
+        nsView.refreshMetrics()
+    }
+
+    private func configure(_ view: HorizontalWheelMonitorView) {
+        view.onMetricsChanged = { leading, trailing in
+            if canScrollLeading != leading {
+                canScrollLeading = leading
+            }
+            if canScrollTrailing != trailing {
+                canScrollTrailing = trailing
+            }
+        }
+    }
 }
 
 private final class HorizontalWheelMonitorView: NSView {
+    var onMetricsChanged: ((Bool, Bool) -> Void)?
     private var eventMonitor: Any?
+    private var observerTokens: [NSObjectProtocol] = []
+    private weak var observedScrollView: NSScrollView?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -259,20 +354,37 @@ private final class HorizontalWheelMonitorView: NSView {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
         }
+        removeScrollObservers()
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         nil
     }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        DispatchQueue.main.async { [weak self] in
+            self?.attachToScrollView()
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        attachToScrollView()
+    }
+
+    func refreshMetrics() {
+        DispatchQueue.main.async { [weak self] in
+            self?.attachToScrollView()
+            self?.publishMetrics()
+        }
+    }
+
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window,
               event.window === window,
               bounds.contains(convert(event.locationInWindow, from: nil)),
-              let scrollView = horizontalScrollView(
-                  below: window.contentView,
-                  at: event.locationInWindow
-              ),
+              let scrollView = observedScrollView,
               let documentView = scrollView.documentView
         else {
             return event
@@ -296,7 +408,80 @@ private final class HorizontalWheelMonitorView: NSView {
 
         clipView.scroll(to: NSPoint(x: targetX, y: clipView.bounds.origin.y))
         scrollView.reflectScrolledClipView(clipView)
+        publishMetrics(for: scrollView)
         return nil
+    }
+
+    private func attachToScrollView() {
+        guard let window else { return }
+        let centerInWindow = convert(
+            NSPoint(x: bounds.midX, y: bounds.midY),
+            to: nil
+        )
+        guard let scrollView = horizontalScrollView(
+            below: window.contentView,
+            at: centerInWindow
+        ) else {
+            publishMetrics(for: nil)
+            return
+        }
+        guard observedScrollView !== scrollView else {
+            publishMetrics(for: scrollView)
+            return
+        }
+
+        removeScrollObservers()
+        observedScrollView = scrollView
+        scrollView.contentView.postsBoundsChangedNotifications = true
+        scrollView.contentView.postsFrameChangedNotifications = true
+        scrollView.documentView?.postsFrameChangedNotifications = true
+
+        let center = NotificationCenter.default
+        observerTokens.append(center.addObserver(
+            forName: NSView.boundsDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.publishMetrics()
+        })
+        observerTokens.append(center.addObserver(
+            forName: NSView.frameDidChangeNotification,
+            object: scrollView.contentView,
+            queue: .main
+        ) { [weak self] _ in
+            self?.publishMetrics()
+        })
+        if let documentView = scrollView.documentView {
+            observerTokens.append(center.addObserver(
+                forName: NSView.frameDidChangeNotification,
+                object: documentView,
+                queue: .main
+            ) { [weak self] _ in
+                self?.publishMetrics()
+            })
+        }
+        publishMetrics(for: scrollView)
+    }
+
+    private func removeScrollObservers() {
+        observerTokens.forEach(NotificationCenter.default.removeObserver)
+        observerTokens.removeAll()
+        observedScrollView = nil
+    }
+
+    private func publishMetrics() {
+        publishMetrics(for: observedScrollView)
+    }
+
+    private func publishMetrics(for scrollView: NSScrollView?) {
+        guard let scrollView, let documentView = scrollView.documentView else {
+            onMetricsChanged?(false, false)
+            return
+        }
+        let clipView = scrollView.contentView
+        let maximumX = max(0, documentView.bounds.width - clipView.bounds.width)
+        let currentX = min(max(clipView.bounds.origin.x, 0), maximumX)
+        onMetricsChanged?(currentX > 0.5, currentX < maximumX - 0.5)
     }
 
     private func horizontalScrollView(below root: NSView?, at point: NSPoint) -> NSScrollView? {

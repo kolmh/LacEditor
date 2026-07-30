@@ -6,6 +6,7 @@ struct EditorTextView: NSViewRepresentable {
     let fontSize: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
+    let isActive: Bool
 
     func makeCoordinator() -> Coordinator {
         Coordinator(document: document)
@@ -69,38 +70,58 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.contentView.postsFrameChangedNotifications = true
         context.coordinator.textView = textView
         context.coordinator.ruler = ruler
+        context.coordinator.currentFontSize = fontSize
+        context.coordinator.currentLanguage = document.language
+        context.coordinator.lastSynchronizedRevision = document.textRevision
         context.coordinator.installObservers(scrollView: scrollView)
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
-        context.coordinator.updateLayout(wordWrap: wordWrap)
-        context.coordinator.applyHighlight(fontSize: fontSize)
+        context.coordinator.updateLayout(wordWrap: wordWrap, force: true)
+        context.coordinator.updateActivity(isActive)
+        context.coordinator.scheduleHighlight(delay: 0)
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
+        let documentChanged = context.coordinator.document.id != document.id
+        let fontChanged = context.coordinator.currentFontSize != fontSize
+        let languageChanged = context.coordinator.currentLanguage != document.language
         context.coordinator.document = document
         context.coordinator.currentFontSize = fontSize
+        context.coordinator.currentLanguage = document.language
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
+        context.coordinator.updateActivity(isActive)
 
         // Marked text is owned by the input method. Replacing the string or its
         // attributes while it is composing cancels Chinese/Japanese/Korean input.
         guard !textView.hasMarkedText() else { return }
 
-        if textView.string != document.text {
-            let selection = textView.selectedRange()
+        let revisionChanged = context.coordinator.lastSynchronizedRevision
+            != document.textRevision
+        if documentChanged || revisionChanged {
             context.coordinator.isApplyingExternalUpdate = true
             textView.string = document.text
+            let textLength = (document.text as NSString).length
+            let selectionLocation = min(document.selectionRange.location, textLength)
+            let selectionLength = min(
+                document.selectionRange.length,
+                textLength - selectionLocation
+            )
             textView.setSelectedRange(NSRange(
-                location: min(selection.location, (document.text as NSString).length),
-                length: 0
+                location: selectionLocation,
+                length: selectionLength
             ))
             context.coordinator.isApplyingExternalUpdate = false
-            context.coordinator.scheduleHighlight()
+            context.coordinator.lastSynchronizedRevision = document.textRevision
         }
 
         context.coordinator.updateLayout(wordWrap: wordWrap)
-        textView.font = editorFont(size: fontSize)
-        context.coordinator.scheduleHighlight()
+        if fontChanged {
+            textView.font = editorFont(size: fontSize)
+        }
+        if documentChanged || revisionChanged || fontChanged || languageChanged {
+            context.coordinator.scheduleHighlight(delay: 0)
+        }
     }
 
     private func editorFont(size: CGFloat) -> NSFont {
@@ -115,13 +136,21 @@ struct EditorTextView: NSViewRepresentable {
         var isApplyingExternalUpdate = false
         private var isApplyingAutomatedEdit = false
         var currentFontSize: CGFloat = 14
+        var currentLanguage: EditorLanguage
+        var lastSynchronizedRevision: UInt
         private var wordWrap = true
+        private var isActive = false
+        private var lineNumbersVisible: Bool?
+        private var lastLayoutWidth: CGFloat = -1
+        private var lastRulerWidth: CGFloat = -1
         private var highlightWorkItem: DispatchWorkItem?
         private var foldedRange: NSRange?
         private var observerTokens: [NSObjectProtocol] = []
 
         init(document: EditorDocument) {
             self.document = document
+            currentLanguage = document.language
+            lastSynchronizedRevision = document.textRevision
         }
 
         deinit {
@@ -195,14 +224,23 @@ struct EditorTextView: NSViewRepresentable {
             })
         }
 
-        func updateLayout(wordWrap: Bool) {
+        func updateLayout(wordWrap: Bool, force: Bool = false) {
             guard let scrollView, let textView, let textContainer = textView.textContainer else { return }
-            self.wordWrap = wordWrap
             let contentSize = scrollView.contentSize
             let availableWidth = max(1, contentSize.width)
             let rulerWidth = scrollView.rulersVisible
                 ? (scrollView.verticalRulerView?.ruleThickness ?? 0)
                 : 0
+            guard force
+                    || self.wordWrap != wordWrap
+                    || abs(lastLayoutWidth - availableWidth) > 0.5
+                    || abs(lastRulerWidth - rulerWidth) > 0.5
+            else {
+                return
+            }
+            self.wordWrap = wordWrap
+            lastLayoutWidth = availableWidth
+            lastRulerWidth = rulerWidth
             let documentWidth = max(1, availableWidth - rulerWidth)
             let usableTextWidth = max(
                 1,
@@ -247,14 +285,30 @@ struct EditorTextView: NSViewRepresentable {
 
         func updateLineNumbersVisibility(_ isVisible: Bool) {
             guard let scrollView else { return }
+            guard lineNumbersVisible != isVisible else { return }
+            lineNumbersVisible = isVisible
             scrollView.hasVerticalRuler = isVisible
             scrollView.rulersVisible = isVisible
+            lastRulerWidth = -1
             ruler?.needsDisplay = true
+        }
+
+        func updateActivity(_ newValue: Bool) {
+            guard isActive != newValue else { return }
+            isActive = newValue
+            guard newValue else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, isActive, let textView, let window = textView.window else {
+                    return
+                }
+                window.makeFirstResponder(textView)
+            }
         }
 
         func textDidChange(_ notification: Notification) {
             guard !isApplyingExternalUpdate, let textView else { return }
             document.text = textView.string
+            lastSynchronizedRevision = document.textRevision
             document.refreshDirtyState()
             document.statusMessage = nil
             if let existing = foldedRange,
@@ -341,11 +395,15 @@ struct EditorTextView: NSViewRepresentable {
             textView?.needsDisplay = true
         }
 
-        func scheduleHighlight() {
+        func scheduleHighlight(delay: TimeInterval = 0.12) {
             highlightWorkItem?.cancel()
             let work = DispatchWorkItem { [weak self] in self?.applyHighlight(fontSize: self?.currentFontSize ?? 14) }
             highlightWorkItem = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+            if delay <= 0 {
+                DispatchQueue.main.async(execute: work)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+            }
         }
 
         func applyHighlight(fontSize: CGFloat) {

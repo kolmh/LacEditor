@@ -163,7 +163,13 @@ require(
 
 let untitledDocument = EditorDocument()
 require(untitledDocument.isDisposableBlank, "new untitled document is disposable")
+let initialRevision = untitledDocument.textRevision
 untitledDocument.text = "临时内容"
+require(
+    untitledDocument.textRevision == initialRevision + 1,
+    "text revision advances after editing"
+)
+require(untitledDocument.wordCount == 4, "word count cache updates after editing")
 untitledDocument.refreshDirtyState()
 require(untitledDocument.isDirty, "typed untitled document is dirty")
 require(!untitledDocument.isDisposableBlank, "non-empty untitled document is not disposable")

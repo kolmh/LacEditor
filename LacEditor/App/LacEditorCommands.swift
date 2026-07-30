@@ -106,10 +106,16 @@ struct LacEditorCommands: Commands {
                 .keyboardShortcut("0", modifiers: .command)
                 .disabled(appState == nil)
             Divider()
-            Menu("外观") {
-                themeButton(.system)
-                themeButton(.light)
-                themeButton(.dark)
+            Picker(
+                "外观",
+                selection: Binding(
+                    get: { appState?.theme ?? .system },
+                    set: { appState?.theme = $0 }
+                )
+            ) {
+                Text(AppTheme.system.rawValue).tag(AppTheme.system)
+                Text(AppTheme.light.rawValue).tag(AppTheme.light)
+                Text(AppTheme.dark.rawValue).tag(AppTheme.dark)
             }
             .disabled(appState == nil)
         }
@@ -150,15 +156,4 @@ struct LacEditorCommands: Commands {
         }
     }
 
-    private func themeButton(_ theme: AppTheme) -> some View {
-        Button {
-            appState?.theme = theme
-        } label: {
-            if appState?.theme == theme {
-                Label(theme.rawValue, systemImage: "checkmark")
-            } else {
-                Text(theme.rawValue)
-            }
-        }
-    }
 }

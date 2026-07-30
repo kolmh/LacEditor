@@ -149,6 +149,98 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+@MainActor
+final class AppearanceMenuController: NSObject {
+    private weak var windowManager: WindowManager?
+    private var observer: NSObjectProtocol?
+
+    init(windowManager: WindowManager) {
+        self.windowManager = windowManager
+        super.init()
+        observer = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            MainActor.assumeIsolated {
+                guard let menu = notification.object as? NSMenu,
+                      menu.items.contains(where: { $0.title == "外观" }) else {
+                    return
+                }
+                self?.installNativeSubmenu(in: menu)
+            }
+        }
+        DispatchQueue.main.async { [weak self] in
+            self?.installFromMainMenu()
+        }
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func installFromMainMenu() {
+        guard let viewMenu = NSApp.mainMenu?.items.first(where: {
+            $0.title == "显示"
+        })?.submenu else { return }
+        installNativeSubmenu(in: viewMenu)
+    }
+
+    private func installNativeSubmenu(in viewMenu: NSMenu) {
+        guard let appearanceItem = viewMenu.items.first(where: {
+            $0.title == "外观"
+        }) else { return }
+
+        if appearanceItem.identifier?.rawValue == "LacEditor.Appearance",
+           let submenu = appearanceItem.submenu {
+            updateItems(in: submenu)
+            appearanceItem.isEnabled = windowManager?.activeState != nil
+            return
+        }
+
+        let submenu = NSMenu(title: "外观")
+        submenu.autoenablesItems = false
+        appearanceItem.identifier = NSUserInterfaceItemIdentifier(
+            "LacEditor.Appearance"
+        )
+        for theme in AppTheme.allCases {
+            let item = NSMenuItem(
+                title: theme.rawValue,
+                action: #selector(selectTheme(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = theme.rawValue
+            item.identifier = NSUserInterfaceItemIdentifier(
+                "LacEditor.Theme.\(theme.id)"
+            )
+            item.isEnabled = windowManager?.activeState != nil
+            item.state = windowManager?.activeState?.theme == theme ? .on : .off
+            submenu.addItem(item)
+        }
+        appearanceItem.submenu = submenu
+        appearanceItem.isEnabled = windowManager?.activeState != nil
+    }
+
+    private func updateItems(in submenu: NSMenu) {
+        for item in submenu.items {
+            guard let rawValue = item.representedObject as? String,
+                  let theme = AppTheme(rawValue: rawValue) else { continue }
+            item.isEnabled = windowManager?.activeState != nil
+            item.state = windowManager?.activeState?.theme == theme ? .on : .off
+        }
+    }
+
+    @objc
+    private func selectTheme(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let theme = AppTheme(rawValue: rawValue) else { return }
+        windowManager?.activeState?.theme = theme
+    }
+}
+
 struct WindowCloseCoordinator: NSViewRepresentable {
     let appState: AppState
     let windowManager: WindowManager

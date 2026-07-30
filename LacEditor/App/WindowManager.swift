@@ -10,13 +10,18 @@ final class WindowManager: ObservableObject {
 
     private var states: [UUID: AppState] = [:]
     private var windowControllers: [UUID: NSWindowController] = [:]
+    private var transferringDocumentIDs: Set<UUID> = []
     private var activeStateCancellable: AnyCancellable?
     private var recentFilesCancellable: AnyCancellable?
+    private lazy var appearanceMenuController = AppearanceMenuController(
+        windowManager: self
+    )
 
     init() {
         recentFilesCancellable = recentFiles.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
+        _ = appearanceMenuController
     }
 
     func register(windowID: UUID, state: AppState, window: NSWindow) {
@@ -83,8 +88,19 @@ final class WindowManager: ObservableObject {
     }
 
     func detach(_ document: EditorDocument, from state: AppState) {
-        guard let transferred = state.takeDocumentForTransfer(document) else { return }
-        openNewWindow(with: transferred)
+        guard transferringDocumentIDs.insert(document.id).inserted else { return }
+
+        // Finish the SwiftUI drag transaction before mutating either window.
+        // Building a new NSHostingController inside onEnded can deadlock layout.
+        DispatchQueue.main.async { [weak self, weak state] in
+            guard let self else { return }
+            defer { transferringDocumentIDs.remove(document.id) }
+            guard let state,
+                  let transferred = state.takeDocumentForTransfer(document) else {
+                return
+            }
+            openNewWindow(with: transferred)
+        }
     }
 
     func confirmClosingAllWindows() -> Bool {
