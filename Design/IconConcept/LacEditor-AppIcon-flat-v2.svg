@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title desc">
+  <title id="title">LacEditor flat geometric app icon</title>
+  <desc id="desc">An abstract letter L with a cursor-shaped cutout and an indigo diagonal split plane.</desc>
+
+  <path
+    fill="#191A1F"
+    d="M272 32C128 32 32 128 32 272v480c0 144 96 240 240 240h480c144 0 240-96 240-240V272C992 128 896 32 752 32H272Z"
+  />
+
+  <path
+    fill="#F6F5F1"
+    fill-rule="evenodd"
+    d="M286 220h160v406h174l80 160H286V220Zm64 80h28v286h-28V300Z"
+  />
+
+  <path
+    fill="#5A63C8"
+    d="M620 626h160v160h-80l-80-160Z"
+  />
+</svg>
