@@ -1,6 +1,8 @@
 import AppKit
 
 final class LineNumberRulerView: NSRulerView {
+    var lineNumberProvider: ((Int) -> Int)?
+
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
     private let padding: CGFloat = 9
 
@@ -26,11 +28,14 @@ final class LineNumberRulerView: NSRulerView {
               let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
 
-        layoutManager.ensureLayout(for: textContainer)
         let visibleRect = textView.visibleRect
         let containerRect = visibleRect.offsetBy(
             dx: -textView.textContainerOrigin.x,
             dy: -textView.textContainerOrigin.y
+        )
+        layoutManager.ensureLayout(
+            forBoundingRect: containerRect,
+            in: textContainer
         )
         let glyphRange = layoutManager.glyphRange(
             forBoundingRect: containerRect,
@@ -39,8 +44,8 @@ final class LineNumberRulerView: NSRulerView {
         let characterRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
         let nsString = textView.string as NSString
 
-        var lineNumber = 1
-        if characterRange.location > 0 {
+        var lineNumber = lineNumberProvider?(characterRange.location) ?? 1
+        if lineNumberProvider == nil, characterRange.location > 0 {
             let prefix = nsString.substring(to: characterRange.location)
             lineNumber = prefix.reduce(into: 1) { count, character in
                 if character == "\n" { count += 1 }

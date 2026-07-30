@@ -67,6 +67,102 @@ require(EditorLanguage.infer(from: URL(fileURLWithPath: "config.yml")) == .yaml,
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "engine.cpp")) == .cFamily, "C++ language inference")
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "schema.sql")) == .sql, "SQL language inference")
 
+private func effectiveSyntaxKind(
+    _ needle: String,
+    in text: String,
+    language: EditorLanguage
+) -> SyntaxHighlighter.TokenKind? {
+    let needleRange = (text as NSString).range(of: needle)
+    guard needleRange.location != NSNotFound else {
+        fatalError("Verification failed: missing syntax sample \(needle)")
+    }
+    return SyntaxHighlighter.tokens(in: text, language: language).last {
+        NSLocationInRange(needleRange.location, $0.range)
+    }?.kind
+}
+
+require(
+    SyntaxHighlighter.tokens(in: "普通文本", language: .plainText).isEmpty,
+    "plain text has no syntax tokens"
+)
+require(
+    effectiveSyntaxKind("**不是强调**", in: "`**不是强调**`", language: .markdown)
+        == .string,
+    "Markdown inline code protects emphasis markers"
+)
+require(
+    effectiveSyntaxKind("true", in: #"{"enabled":"true","actual":true}"#, language: .json)
+        == .string,
+    "JSON string protects literal-looking content"
+)
+require(
+    effectiveSyntaxKind(#""enabled""#, in: #"{"enabled":true}"#, language: .json)
+        == .property,
+    "JSON object key highlighting"
+)
+require(
+    effectiveSyntaxKind("<div>", in: "<!-- <div> --><p class=\"lead\">正文</p>", language: .html)
+        == .comment,
+    "HTML comments protect embedded tags"
+)
+require(
+    effectiveSyntaxKind("class", in: "<p class=\"lead\">正文</p>", language: .html)
+        == .attribute,
+    "HTML attribute highlighting"
+)
+
+let javascriptSyntax = #"const url = "https://example.com"; // actual comment"#
+require(
+    effectiveSyntaxKind("//example", in: javascriptSyntax, language: .javascript)
+        == .string,
+    "JavaScript comment marker inside string stays a string"
+)
+require(
+    effectiveSyntaxKind("// actual", in: javascriptSyntax, language: .javascript)
+        == .comment,
+    "JavaScript line comment highlighting"
+)
+require(
+    effectiveSyntaxKind("interface", in: "interface Item { value: string }", language: .typescript)
+        == .keyword,
+    "TypeScript keyword highlighting"
+)
+require(
+    effectiveSyntaxKind("color", in: "/* color: red */\na { color: #fff; }", language: .css)
+        == .comment,
+    "CSS comments protect property-looking content"
+)
+require(
+    effectiveSyntaxKind("# literal", in: "value = \"# literal\" # actual", language: .python)
+        == .string,
+    "Python comment marker inside string stays a string"
+)
+require(
+    effectiveSyntaxKind("// literal", in: #"let value = "// literal" // actual"#, language: .swift)
+        == .string,
+    "Swift comment marker inside string stays a string"
+)
+require(
+    effectiveSyntaxKind("# literal", in: "echo \"# literal\" # actual", language: .shell)
+        == .string,
+    "Shell comment marker inside string stays a string"
+)
+require(
+    effectiveSyntaxKind("# literal", in: "value: \"# literal\" # actual", language: .yaml)
+        == .string,
+    "YAML comment marker inside string stays a string"
+)
+require(
+    effectiveSyntaxKind("// literal", in: #"const char *value = "// literal"; // actual"#, language: .cFamily)
+        == .string,
+    "C-family comment marker inside string stays a string"
+)
+require(
+    effectiveSyntaxKind("-- literal", in: "SELECT '-- literal'; -- actual", language: .sql)
+        == .string,
+    "SQL comment marker inside string stays a string"
+)
+
 require(
     ListContinuationService.continuation(for: "9. 第九项") == "10. ",
     "ordered list continuation"
@@ -200,6 +296,59 @@ let replaceResult = TextSearchService.replacingAll(
 )
 require(replaceResult.text == "x b x", "replace all output")
 require(replaceResult.count == 2, "replace all count")
+
+let lineIndexSource = "第一行\n第二行"
+let lineIndex = LogicalLineIndex(text: lineIndexSource)
+let secondLineStart = ("第一行\n" as NSString).length
+let initialPosition = lineIndex.position(
+    at: secondLineStart,
+    in: lineIndexSource as NSString
+)
+require(initialPosition.line == 2, "logical line index initial line")
+require(initialPosition.column == 1, "logical line index initial column")
+
+lineIndex.applyEdit(
+    range: NSRange(location: secondLineStart, length: 0),
+    replacement: "新增行\n"
+)
+let insertedLineSource = "第一行\n新增行\n第二行"
+let insertedPosition = lineIndex.position(
+    at: ("第一行\n新增行\n" as NSString).length,
+    in: insertedLineSource as NSString
+)
+require(insertedPosition.line == 3, "logical line index tracks inserted newline")
+require(
+    lineIndex.textLength == (insertedLineSource as NSString).length,
+    "logical line index tracks inserted text length"
+)
+
+let insertedLineRange = (insertedLineSource as NSString).range(of: "新增行\n")
+lineIndex.applyEdit(range: insertedLineRange, replacement: "")
+let deletedPosition = lineIndex.position(
+    at: secondLineStart,
+    in: lineIndexSource as NSString
+)
+require(deletedPosition.line == 2, "logical line index tracks deleted newline")
+require(
+    lineIndex.textLength == (lineIndexSource as NSString).length,
+    "logical line index tracks deleted text length"
+)
+require(
+    lineIndex.lineNumber(at: Int.max) == 2,
+    "logical line index clamps locations at text end"
+)
+
+let emojiLine = "😀a\n末尾"
+let emojiIndex = LogicalLineIndex(text: emojiLine)
+let emojiPosition = emojiIndex.position(
+    at: ("😀a" as NSString).length,
+    in: emojiLine as NSString
+)
+require(emojiPosition.line == 1, "logical line index keeps emoji on first line")
+require(
+    emojiPosition.column == 3,
+    "logical line index reports character-based Unicode columns"
+)
 
 let headingSource = "# 一级\n正文\n## 二级\n内容\n# 下一个\n"
 let headingRange = FoldService.foldableRange(in: headingSource, at: 0, language: .markdown)

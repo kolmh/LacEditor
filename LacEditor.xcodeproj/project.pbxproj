@@ -39,6 +39,7 @@
 		A00000000000000000000122 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* SwiftUI.framework */; };
 		A00000000000000000000123 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* WebKit.framework */; };
 		A00000000000000000000124 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* UniformTypeIdentifiers.framework */; };
+		A00000000000000000000125 /* LogicalLineIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* LogicalLineIndex.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -75,6 +76,7 @@
 		A00000000000000000000022 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
 		A00000000000000000000023 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
 		A00000000000000000000024 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
+		A00000000000000000000025 /* LogicalLineIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogicalLineIndex.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -118,7 +120,7 @@
 		A00000000000000000000302 /* App */ = {isa = PBXGroup; children = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A0000000000000000000001B); path = App; sourceTree = "<group>"; };
 		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005, A00000000000000000000006); path = Models; sourceTree = "<group>"; };
 		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000008, A00000000000000000000009, A00000000000000000000017); path = Services; sourceTree = "<group>"; };
-		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000019); path = Editor; sourceTree = "<group>"; };
+		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
 		A00000000000000000000306 /* Preview */ = {isa = PBXGroup; children = (A0000000000000000000000F, A00000000000000000000010); path = Preview; sourceTree = "<group>"; };
 		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000014, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
 		A00000000000000000000309 /* Frameworks */ = {isa = PBXGroup; children = (A00000000000000000000021, A00000000000000000000022, A00000000000000000000023, A00000000000000000000024); name = Frameworks; sourceTree = "<group>"; };
@@ -193,6 +195,7 @@
 				A00000000000000000000116, A00000000000000000000117, A00000000000000000000118,
 				A00000000000000000000119, A0000000000000000000011A,
 				A0000000000000000000011B,
+				A00000000000000000000125,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

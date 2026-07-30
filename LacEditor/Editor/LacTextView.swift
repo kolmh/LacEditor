@@ -8,10 +8,41 @@ extension NSColor {
         }
         return NSColor(red: 0.992, green: 0.988, blue: 0.975, alpha: 1)
     }
+
+    static let lacCurrentLineBackground = NSColor(name: nil) { appearance in
+        let match = appearance.bestMatch(from: [.darkAqua, .aqua])
+        if match == .darkAqua {
+            return NSColor(
+                calibratedRed: 0.48,
+                green: 0.53,
+                blue: 0.88,
+                alpha: 0.16
+            )
+        }
+        return NSColor(
+            calibratedRed: 0.31,
+            green: 0.34,
+            blue: 0.66,
+            alpha: 0.065
+        )
+    }
 }
 
 final class LacTextView: NSTextView {
-    var currentLineColor: NSColor = .selectedContentBackgroundColor.withAlphaComponent(0.055)
+    var currentLineColor: NSColor = .lacCurrentLineBackground
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        needsDisplay = true
+        if let layoutManager {
+            layoutManager.invalidateDisplay(
+                forCharacterRange: NSRange(
+                    location: 0,
+                    length: (string as NSString).length
+                )
+            )
+        }
+    }
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)

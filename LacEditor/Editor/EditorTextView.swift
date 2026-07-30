@@ -70,6 +70,9 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.contentView.postsFrameChangedNotifications = true
         context.coordinator.textView = textView
         context.coordinator.ruler = ruler
+        ruler.lineNumberProvider = { [weak coordinator = context.coordinator] location in
+            coordinator?.lineNumber(at: location) ?? 1
+        }
         context.coordinator.currentFontSize = fontSize
         context.coordinator.currentLanguage = document.language
         context.coordinator.lastSynchronizedRevision = document.textRevision
@@ -101,6 +104,7 @@ struct EditorTextView: NSViewRepresentable {
         if documentChanged || revisionChanged {
             context.coordinator.isApplyingExternalUpdate = true
             textView.string = document.text
+            context.coordinator.resetLineIndex(with: document.text)
             let textLength = (document.text as NSString).length
             let selectionLocation = min(document.selectionRange.location, textLength)
             let selectionLength = min(
@@ -146,11 +150,13 @@ struct EditorTextView: NSViewRepresentable {
         private var highlightWorkItem: DispatchWorkItem?
         private var foldedRange: NSRange?
         private var observerTokens: [NSObjectProtocol] = []
+        private let lineIndex: LogicalLineIndex
 
         init(document: EditorDocument) {
             self.document = document
             currentLanguage = document.language
             lastSynchronizedRevision = document.textRevision
+            lineIndex = LogicalLineIndex(text: document.text)
         }
 
         deinit {
@@ -271,7 +277,7 @@ struct EditorTextView: NSViewRepresentable {
             scrollView.horizontalScrollElasticity = wordWrap ? .none : .automatic
             resetHorizontalScrollIfNeeded()
             textView.needsDisplay = true
-            textView.layoutManager?.ensureLayout(for: textContainer)
+            ensureVisibleLayout()
         }
 
         private func resetHorizontalScrollIfNeeded() {
@@ -307,6 +313,9 @@ struct EditorTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !isApplyingExternalUpdate, let textView else { return }
+            if lineIndex.textLength != (textView.string as NSString).length {
+                lineIndex.reset(with: textView.string)
+            }
             document.text = textView.string
             lastSynchronizedRevision = document.textRevision
             document.refreshDirtyState()
@@ -334,11 +343,6 @@ struct EditorTextView: NSViewRepresentable {
             shouldChangeTextIn affectedCharRange: NSRange,
             replacementString: String?
         ) -> Bool {
-            guard !isApplyingAutomatedEdit,
-                  document.language == .markdown else {
-                return true
-            }
-
             let replacement = replacementString ?? ""
             let nsText = textView.string as NSString
             let safeLocation = min(affectedCharRange.location, nsText.length)
@@ -349,6 +353,16 @@ struct EditorTextView: NSViewRepresentable {
                     nsText.length - safeLocation
                 )
             )
+
+            if isApplyingAutomatedEdit {
+                lineIndex.applyEdit(range: safeRange, replacement: replacement)
+                return true
+            }
+            guard document.language == .markdown else {
+                lineIndex.applyEdit(range: safeRange, replacement: replacement)
+                return true
+            }
+
             guard ListContinuationService.shouldNormalizeOrderedListEdit(
                     in: textView.string,
                     range: safeRange,
@@ -359,6 +373,7 @@ struct EditorTextView: NSViewRepresentable {
                     range: safeRange,
                     replacement: replacement
                   ) else {
+                lineIndex.applyEdit(range: safeRange, replacement: replacement)
                 return true
             }
 
@@ -373,6 +388,7 @@ struct EditorTextView: NSViewRepresentable {
                 from: textView.string,
                 to: normalization.text
             ) else {
+                lineIndex.applyEdit(range: safeRange, replacement: replacement)
                 return true
             }
 
@@ -427,10 +443,12 @@ struct EditorTextView: NSViewRepresentable {
             let selection = textView.selectedRange()
             document.selectionRange = selection
             let location = min(selection.location, (textView.string as NSString).length)
-            let prefix = (textView.string as NSString).substring(to: location)
-            let lines = prefix.split(separator: "\n", omittingEmptySubsequences: false)
-            document.cursorLine = max(1, lines.count)
-            document.cursorColumn = (lines.last?.count ?? 0) + 1
+            let position = lineIndex.position(
+                at: location,
+                in: textView.string as NSString
+            )
+            document.cursorLine = position.line
+            document.cursorColumn = position.column
         }
 
         private func combinedEdit(
@@ -468,10 +486,8 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         private func refreshRuler() {
-            guard let textView,
-                  let layoutManager = textView.layoutManager,
-                  let textContainer = textView.textContainer else { return }
-            layoutManager.ensureLayout(for: textContainer)
+            guard textView != nil else { return }
+            ensureVisibleLayout()
             ruler?.invalidateHashMarks()
             ruler?.needsDisplay = true
 
@@ -481,6 +497,30 @@ struct EditorTextView: NSViewRepresentable {
                 self?.ruler?.invalidateHashMarks()
                 self?.ruler?.needsDisplay = true
             }
+        }
+
+        func resetLineIndex(with text: String) {
+            lineIndex.reset(with: text)
+        }
+
+        func lineNumber(at location: Int) -> Int {
+            lineIndex.lineNumber(at: location)
+        }
+
+        private func ensureVisibleLayout() {
+            guard let textView,
+                  let layoutManager = textView.layoutManager,
+                  let textContainer = textView.textContainer else {
+                return
+            }
+            let visibleRect = textView.visibleRect.offsetBy(
+                dx: -textView.textContainerOrigin.x,
+                dy: -textView.textContainerOrigin.y
+            )
+            layoutManager.ensureLayout(
+                forBoundingRect: visibleRect,
+                in: textContainer
+            )
         }
 
         private func visibleHighlightRange() -> NSRange? {

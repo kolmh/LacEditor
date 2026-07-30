@@ -47,7 +47,7 @@ private struct RecentFilesView: View {
                 Spacer()
                 if !store.urls.isEmpty {
                     Button {
-                        store.clear()
+                        windowManager.requestClearRecentFiles()
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 11))

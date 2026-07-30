@@ -4,11 +4,7 @@ import SwiftUI
 struct TabBarView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var windowManager: WindowManager
-    @State private var draggedDocumentID: UUID?
-    @State private var dragTargetDocumentID: UUID?
-    @State private var dragTranslationX: CGFloat = 0
-    @State private var tabFrames: [UUID: CGRect] = [:]
-    @State private var dragStartFrames: [UUID: CGRect] = [:]
+    @State private var dropTargetDocumentID: UUID?
     @State private var canScrollLeading = false
     @State private var canScrollTrailing = false
 
@@ -22,37 +18,50 @@ struct TabBarView: View {
                                 EditorTabView(
                                     document: document,
                                     isSelected: appState.selectedDocumentID == document.id,
-                                    isDragging: draggedDocumentID == document.id,
+                                    isDragging: windowManager.draggedDocumentID == document.id,
+                                    isDropTarget: dropTargetDocumentID == document.id
+                                        && windowManager.draggedDocumentID != document.id,
                                     select: { appState.selectedDocumentID = document.id },
-                                    close: { appState.close(document) }
+                                    close: { appState.close(document) },
+                                    beginDrag: {
+                                        windowManager.beginTabDrag(
+                                            document,
+                                            from: appState
+                                        )
+                                    },
+                                    finishDrag: { screenPoint in
+                                        dropTargetDocumentID = nil
+                                        windowManager.finishTabDrag(at: screenPoint)
+                                    },
+                                    dropEntered: {
+                                        dropTargetDocumentID = document.id
+                                        windowManager.setTabDragTarget(
+                                            in: appState,
+                                            before: document.id
+                                        )
+                                    },
+                                    dropExited: {
+                                        if dropTargetDocumentID == document.id {
+                                            dropTargetDocumentID = nil
+                                        }
+                                        windowManager.clearTabDragTarget(
+                                            in: appState,
+                                            before: document.id
+                                        )
+                                    },
+                                    acceptDrop: {
+                                        dropTargetDocumentID = nil
+                                        return windowManager.acceptTabDrag(
+                                            into: appState,
+                                            before: document.id
+                                        )
+                                    }
                                 )
                                 .id(document.id)
-                                .offset(x: tabOffset(for: document.id))
-                                .zIndex(draggedDocumentID == document.id ? 2 : 0)
-                                .shadow(
-                                    color: .black.opacity(draggedDocumentID == document.id ? 0.12 : 0),
-                                    radius: 5,
-                                    y: 2
-                                )
-                                .animation(
-                                    .interactiveSpring(response: 0.2, dampingFraction: 0.86),
-                                    value: dragTargetDocumentID
-                                )
                                 .transition(.asymmetric(
                                     insertion: .offset(x: 12).combined(with: .opacity),
                                     removal: .scale(scale: 0.96).combined(with: .opacity)
                                 ))
-                                .background {
-                                    GeometryReader { geometry in
-                                        Color.clear.preference(
-                                            key: TabFramePreferenceKey.self,
-                                            value: [
-                                                document.id: geometry.frame(in: .named("tabBar"))
-                                            ]
-                                        )
-                                    }
-                                }
-                                .simultaneousGesture(dragGesture(for: document))
                                 .contextMenu {
                                     Button("关闭") { appState.close(document) }
                                     Button("关闭其他标签页") {
@@ -63,6 +72,32 @@ struct TabBarView: View {
                                     }
                                 }
                             }
+
+                            NativeTabDropZone(
+                                canAcceptDrop: {
+                                    windowManager.draggedDocumentID != nil
+                                },
+                                dropEntered: {
+                                    windowManager.setTabDragTarget(
+                                        in: appState,
+                                        before: nil
+                                    )
+                                },
+                                dropExited: {
+                                    windowManager.clearTabDragTarget(
+                                        in: appState,
+                                        before: nil
+                                    )
+                                },
+                                acceptDrop: {
+                                    dropTargetDocumentID = nil
+                                    return windowManager.acceptTabDrag(
+                                        into: appState,
+                                        before: nil
+                                    )
+                                }
+                            )
+                            .frame(width: 28, height: 36)
                         }
                         .animation(
                             .smooth(duration: 0.24),
@@ -113,7 +148,6 @@ struct TabBarView: View {
             .stableHelp("新建标签页", shortcut: "⌘T")
         }
         .coordinateSpace(name: "tabBar")
-        .onPreferenceChange(TabFramePreferenceKey.self) { tabFrames = $0 }
         .frame(height: 36)
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
     }
@@ -132,109 +166,20 @@ struct TabBarView: View {
         .frame(width: 30)
         .allowsHitTesting(false)
     }
-
-    private func dragGesture(for document: EditorDocument) -> some Gesture {
-        DragGesture(minimumDistance: 5, coordinateSpace: .named("tabBar"))
-            .onChanged { value in
-                if draggedDocumentID == nil {
-                    draggedDocumentID = document.id
-                    dragStartFrames = tabFrames
-                    appState.selectedDocumentID = document.id
-                }
-                guard draggedDocumentID == document.id else { return }
-                dragTranslationX = value.translation.width
-                dragTargetDocumentID = nearestTab(to: value.location.x)
-            }
-            .onEnded { _ in
-                let targetID = dragTargetDocumentID
-                let shouldDetach: Bool
-                if let window = appState.hostWindow {
-                    shouldDetach = !window.frame
-                        .insetBy(dx: -12, dy: -12)
-                        .contains(NSEvent.mouseLocation)
-                } else {
-                    shouldDetach = false
-                }
-
-                if shouldDetach {
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        clearDragState()
-                    }
-                    windowManager.detach(document, from: appState)
-                } else if let targetID, targetID != document.id {
-                    withAnimation(.smooth(duration: 0.18)) {
-                        appState.moveDocument(document.id, relativeTo: targetID)
-                        clearDragState()
-                    }
-                } else {
-                    withAnimation(.easeOut(duration: 0.1)) {
-                        clearDragState()
-                    }
-                }
-            }
-    }
-
-    private func nearestTab(to horizontalLocation: CGFloat) -> UUID? {
-        let frames = dragStartFrames.isEmpty ? tabFrames : dragStartFrames
-        return frames.min {
-            abs($0.value.midX - horizontalLocation)
-                < abs($1.value.midX - horizontalLocation)
-        }?.key
-    }
-
-    private func clearDragState() {
-        draggedDocumentID = nil
-        dragTargetDocumentID = nil
-        dragTranslationX = 0
-        dragStartFrames = [:]
-    }
-
-    private func tabOffset(for documentID: UUID) -> CGFloat {
-        guard let draggedDocumentID,
-              let sourceIndex = appState.documents.firstIndex(where: {
-                  $0.id == draggedDocumentID
-              }),
-              let targetID = dragTargetDocumentID,
-              let targetIndex = appState.documents.firstIndex(where: {
-                  $0.id == targetID
-              }),
-              let sourceWidth = (
-                  dragStartFrames[draggedDocumentID]
-                  ?? tabFrames[draggedDocumentID]
-              )?.width
-        else {
-            return 0
-        }
-
-        if documentID == draggedDocumentID {
-            return dragTranslationX
-        }
-        guard let index = appState.documents.firstIndex(where: {
-            $0.id == documentID
-        }) else {
-            return 0
-        }
-
-        if sourceIndex < targetIndex,
-           index > sourceIndex,
-           index <= targetIndex {
-            return -sourceWidth
-        }
-        if targetIndex < sourceIndex,
-           index >= targetIndex,
-           index < sourceIndex {
-            return sourceWidth
-        }
-        return 0
-    }
 }
 
 private struct EditorTabView: View {
     @ObservedObject var document: EditorDocument
     let isSelected: Bool
     let isDragging: Bool
+    let isDropTarget: Bool
     let select: () -> Void
     let close: () -> Void
+    let beginDrag: () -> Void
+    let finishDrag: (NSPoint) -> Void
+    let dropEntered: () -> Void
+    let dropExited: () -> Void
+    let acceptDrop: () -> Bool
     @State private var isHovering = false
 
     var body: some View {
@@ -289,20 +234,352 @@ private struct EditorTabView: View {
                 .fill(Color(nsColor: .separatorColor))
                 .frame(width: 1)
         }
+        .overlay(alignment: .leading) {
+            if isDropTarget {
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2, height: 26)
+                    .transition(.opacity)
+            }
+        }
+        .overlay {
+            GeometryReader { geometry in
+                HStack(spacing: 0) {
+                    NativeTabDragHandle(
+                        documentID: document.id,
+                        title: document.displayName,
+                        iconName: document.language.icon,
+                        isDirty: document.isDirty,
+                        select: select,
+                        beginDrag: beginDrag,
+                        finishDrag: finishDrag,
+                        canAcceptDrop: { !isDragging },
+                        dropEntered: dropEntered,
+                        dropExited: dropExited,
+                        acceptDrop: acceptDrop
+                    )
+                    .frame(width: max(0, geometry.size.width - 31))
+
+                    Spacer(minLength: 0)
+                }
+            }
+        }
         .contentShape(Rectangle())
-        .opacity(isDragging ? 0.72 : 1)
+        .opacity(isDragging ? 0.48 : 1)
+        .scaleEffect(isDragging ? 0.98 : 1)
         .animation(.easeInOut(duration: 0.16), value: isSelected)
-        .animation(.easeInOut(duration: 0.12), value: isDragging)
+        .animation(.easeOut(duration: 0.12), value: isDragging)
+        .animation(.easeOut(duration: 0.1), value: isDropTarget)
         .onTapGesture(perform: select)
         .onHover { isHovering = $0 }
     }
 }
 
-private struct TabFramePreferenceKey: PreferenceKey {
-    static var defaultValue: [UUID: CGRect] = [:]
+private struct NativeTabDragHandle: NSViewRepresentable {
+    let documentID: UUID
+    let title: String
+    let iconName: String
+    let isDirty: Bool
+    let select: () -> Void
+    let beginDrag: () -> Void
+    let finishDrag: (NSPoint) -> Void
+    let canAcceptDrop: () -> Bool
+    let dropEntered: () -> Void
+    let dropExited: () -> Void
+    let acceptDrop: () -> Bool
 
-    static func reduce(value: inout [UUID: CGRect], nextValue: () -> [UUID: CGRect]) {
-        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    func makeNSView(context: Context) -> TabDragHandleView {
+        let view = TabDragHandleView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: TabDragHandleView, context: Context) {
+        configure(nsView)
+    }
+
+    private func configure(_ view: TabDragHandleView) {
+        view.documentID = documentID
+        view.title = title
+        view.iconName = iconName
+        view.isDirty = isDirty
+        view.onSelect = select
+        view.onDragBegan = beginDrag
+        view.onDragEnded = finishDrag
+        view.canAcceptDrop = canAcceptDrop
+        view.onDropEntered = dropEntered
+        view.onDropExited = dropExited
+        view.onAcceptDrop = acceptDrop
+    }
+}
+
+private final class TabDragHandleView: NSView, NSDraggingSource {
+    var documentID = UUID()
+    var title = ""
+    var iconName = "doc.plaintext"
+    var isDirty = false
+    var onSelect: (() -> Void)?
+    var onDragBegan: (() -> Void)?
+    var onDragEnded: ((NSPoint) -> Void)?
+    var canAcceptDrop: (() -> Bool)?
+    var onDropEntered: (() -> Void)?
+    var onDropExited: (() -> Void)?
+    var onAcceptDrop: (() -> Bool)?
+
+    private var mouseDownLocation: NSPoint?
+    private var hasStartedDragging = false
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setAccessibilityElement(false)
+        registerForDraggedTypes([WindowManager.tabPasteboardType])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        if NSApp.currentEvent?.type == .rightMouseDown {
+            return nil
+        }
+        return super.hitTest(point)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        mouseDownLocation = convert(event.locationInWindow, from: nil)
+        hasStartedDragging = false
+        onSelect?()
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard !hasStartedDragging, let mouseDownLocation else { return }
+        let current = convert(event.locationInWindow, from: nil)
+        guard hypot(
+            current.x - mouseDownLocation.x,
+            current.y - mouseDownLocation.y
+        ) >= 4 else {
+            return
+        }
+
+        hasStartedDragging = true
+        onDragBegan?()
+        NSCursor.closedHand.set()
+
+        let item = NSPasteboardItem()
+        item.setString(
+            documentID.uuidString,
+            forType: WindowManager.tabPasteboardType
+        )
+        let draggingItem = NSDraggingItem(pasteboardWriter: item)
+        let image = dragImage()
+        draggingItem.setDraggingFrame(
+            NSRect(origin: .zero, size: image.size),
+            contents: image
+        )
+        let session = beginDraggingSession(
+            with: [draggingItem],
+            event: event,
+            source: self
+        )
+        session.animatesToStartingPositionsOnCancelOrFail = false
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        mouseDownLocation = nil
+        if !hasStartedDragging {
+            NSCursor.arrow.set()
+        }
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        sourceOperationMaskFor context: NSDraggingContext
+    ) -> NSDragOperation {
+        .move
+    }
+
+    func ignoreModifierKeys(
+        for session: NSDraggingSession
+    ) -> Bool {
+        true
+    }
+
+    func draggingSession(
+        _ session: NSDraggingSession,
+        endedAt screenPoint: NSPoint,
+        operation: NSDragOperation
+    ) {
+        mouseDownLocation = nil
+        hasStartedDragging = false
+        NSCursor.arrow.set()
+        onDragEnded?(screenPoint)
+    }
+
+    override func draggingEntered(
+        _ sender: any NSDraggingInfo
+    ) -> NSDragOperation {
+        guard accepts(sender) else { return [] }
+        onDropEntered?()
+        return .move
+    }
+
+    override func draggingUpdated(
+        _ sender: any NSDraggingInfo
+    ) -> NSDragOperation {
+        accepts(sender) ? .move : []
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        onDropExited?()
+    }
+
+    override func performDragOperation(
+        _ sender: any NSDraggingInfo
+    ) -> Bool {
+        guard accepts(sender) else { return false }
+        onDropExited?()
+        return onAcceptDrop?() ?? false
+    }
+
+    private func accepts(_ sender: any NSDraggingInfo) -> Bool {
+        canAcceptDrop?() == true
+            && sender.draggingPasteboard.availableType(
+                from: [WindowManager.tabPasteboardType]
+            ) != nil
+    }
+
+    private func dragImage() -> NSImage {
+        let size = NSSize(width: max(128, bounds.width + 31), height: 36)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        defer { image.unlockFocus() }
+
+        let rect = NSRect(origin: .zero, size: size).insetBy(dx: 3, dy: 3)
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
+        shadow.shadowBlurRadius = 7
+        shadow.shadowOffset = NSSize(width: 0, height: -2)
+        shadow.set()
+
+        NSColor.windowBackgroundColor.withAlphaComponent(0.98).setFill()
+        NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+        NSGraphicsContext.current?.saveGraphicsState()
+        NSShadow().set()
+        NSColor.separatorColor.setStroke()
+        NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).stroke()
+
+        if let icon = NSImage(
+            systemSymbolName: iconName,
+            accessibilityDescription: nil
+        ) {
+            icon.draw(
+                in: NSRect(x: 13, y: 11, width: 14, height: 14),
+                from: .zero,
+                operation: .sourceOver,
+                fraction: 0.78
+            )
+        }
+
+        let titleRect = NSRect(
+            x: 34,
+            y: 9,
+            width: max(20, size.width - (isDirty ? 58 : 43)),
+            height: 17
+        )
+        (title as NSString).draw(
+            with: titleRect,
+            options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
+                .foregroundColor: NSColor.labelColor
+            ]
+        )
+        if isDirty {
+            NSColor.secondaryLabelColor.setFill()
+            NSBezierPath(
+                ovalIn: NSRect(x: size.width - 18, y: 15, width: 6, height: 6)
+            ).fill()
+        }
+        NSGraphicsContext.current?.restoreGraphicsState()
+        return image
+    }
+}
+
+private struct NativeTabDropZone: NSViewRepresentable {
+    let canAcceptDrop: () -> Bool
+    let dropEntered: () -> Void
+    let dropExited: () -> Void
+    let acceptDrop: () -> Bool
+
+    func makeNSView(context: Context) -> TabDropZoneView {
+        let view = TabDropZoneView()
+        configure(view)
+        return view
+    }
+
+    func updateNSView(_ nsView: TabDropZoneView, context: Context) {
+        configure(nsView)
+    }
+
+    private func configure(_ view: TabDropZoneView) {
+        view.canAcceptDrop = canAcceptDrop
+        view.onDropEntered = dropEntered
+        view.onDropExited = dropExited
+        view.onAcceptDrop = acceptDrop
+    }
+}
+
+private final class TabDropZoneView: NSView {
+    var canAcceptDrop: (() -> Bool)?
+    var onDropEntered: (() -> Void)?
+    var onDropExited: (() -> Void)?
+    var onAcceptDrop: (() -> Bool)?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([WindowManager.tabPasteboardType])
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func draggingEntered(
+        _ sender: any NSDraggingInfo
+    ) -> NSDragOperation {
+        guard accepts(sender) else { return [] }
+        onDropEntered?()
+        return .move
+    }
+
+    override func draggingUpdated(
+        _ sender: any NSDraggingInfo
+    ) -> NSDragOperation {
+        accepts(sender) ? .move : []
+    }
+
+    override func draggingExited(_ sender: (any NSDraggingInfo)?) {
+        onDropExited?()
+    }
+
+    override func performDragOperation(
+        _ sender: any NSDraggingInfo
+    ) -> Bool {
+        guard accepts(sender) else { return false }
+        onDropExited?()
+        return onAcceptDrop?() ?? false
+    }
+
+    private func accepts(_ sender: any NSDraggingInfo) -> Bool {
+        canAcceptDrop?() == true
+            && sender.draggingPasteboard.availableType(
+                from: [WindowManager.tabPasteboardType]
+            ) != nil
     }
 }
 

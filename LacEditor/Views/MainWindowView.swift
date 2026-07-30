@@ -5,7 +5,8 @@ struct MainWindowView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     @State private var isDropTargeted = false
-    @State private var loadedDocumentIDs: Set<UUID> = []
+    @State private var loadedDocumentIDs: [UUID] = []
+    private let editorCacheLimit = 8
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -72,16 +73,17 @@ struct MainWindowView: View {
         }
         .onAppear {
             if let selectedID = appState.selectedDocumentID {
-                loadedDocumentIDs.insert(selectedID)
+                markEditorLoaded(selectedID)
             }
         }
         .onChange(of: appState.selectedDocumentID) { _, selectedID in
             if let selectedID {
-                loadedDocumentIDs.insert(selectedID)
+                markEditorLoaded(selectedID)
             }
         }
         .onChange(of: appState.documents.map(\.id)) { _, documentIDs in
-            loadedDocumentIDs.formIntersection(documentIDs)
+            let liveIDs = Set(documentIDs)
+            loadedDocumentIDs.removeAll { !liveIDs.contains($0) }
         }
     }
 
@@ -122,6 +124,16 @@ struct MainWindowView: View {
     private var loadedDocuments: [EditorDocument] {
         appState.documents.filter {
             loadedDocumentIDs.contains($0.id) || $0.id == appState.selectedDocumentID
+        }
+    }
+
+    private func markEditorLoaded(_ documentID: UUID) {
+        loadedDocumentIDs.removeAll { $0 == documentID }
+        loadedDocumentIDs.append(documentID)
+        if loadedDocumentIDs.count > editorCacheLimit {
+            loadedDocumentIDs.removeFirst(
+                loadedDocumentIDs.count - editorCacheLimit
+            )
         }
     }
 }

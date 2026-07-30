@@ -45,6 +45,8 @@ swiftc \
     LacEditor/Services/TextSearchService.swift \
     LacEditor/Editor/FoldService.swift \
     LacEditor/Editor/ListContinuationService.swift \
+    LacEditor/Editor/LogicalLineIndex.swift \
+    LacEditor/Editor/SyntaxHighlighter.swift \
     LacEditor/Preview/MarkdownRenderer.swift \
     Verification/main.swift \
     -o .build/core-verification

@@ -33,7 +33,9 @@ struct LacEditorCommands: Commands {
                         Button(url.lastPathComponent) { appState?.openFile(url) }
                     }
                     Divider()
-                    Button("清除菜单") { windowManager.recentFiles.clear() }
+                    Button("清除菜单") {
+                        windowManager.requestClearRecentFiles()
+                    }
                 }
             }
         }

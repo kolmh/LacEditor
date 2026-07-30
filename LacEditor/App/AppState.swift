@@ -272,17 +272,21 @@ final class AppState: ObservableObject {
         selectedDocumentID = documents[index].id
     }
 
-    func moveDocument(_ sourceID: UUID, relativeTo targetID: UUID) {
-        guard sourceID != targetID,
-              let sourceIndex = documents.firstIndex(where: { $0.id == sourceID }),
-              let targetIndex = documents.firstIndex(where: { $0.id == targetID })
-        else { return }
+    func moveDocument(_ sourceID: UUID, before targetID: UUID?) {
+        guard let sourceIndex = documents.firstIndex(where: {
+            $0.id == sourceID
+        }) else { return }
+        if targetID == sourceID {
+            selectedDocumentID = sourceID
+            return
+        }
 
-        let destination = sourceIndex < targetIndex ? targetIndex + 1 : targetIndex
-        documents.move(
-            fromOffsets: IndexSet(integer: sourceIndex),
-            toOffset: destination
-        )
+        let document = documents.remove(at: sourceIndex)
+        let destination = targetID.flatMap { targetID in
+            documents.firstIndex(where: { $0.id == targetID })
+        } ?? documents.endIndex
+        documents.insert(document, at: destination)
+        selectedDocumentID = sourceID
     }
 
     func takeDocumentForTransfer(_ document: EditorDocument) -> EditorDocument? {
@@ -297,6 +301,32 @@ final class AppState: ObservableObject {
             selectedDocumentID = documents[min(index, documents.count - 1)].id
         }
         return document
+    }
+
+    func receiveTransferredDocument(
+        _ document: EditorDocument,
+        before targetID: UUID? = nil
+    ) {
+        if documents.contains(where: {
+            $0.id == document.id
+        }) {
+            moveDocument(document.id, before: targetID)
+            selectedDocumentID = document.id
+            return
+        }
+
+        if documents.count == 1, let blank = documents.first,
+           blank.isDisposableBlank {
+            stopObserving(blank)
+            documents.removeAll()
+        }
+
+        let destination = targetID.flatMap { targetID in
+            documents.firstIndex(where: { $0.id == targetID })
+        } ?? documents.endIndex
+        documents.insert(document, at: destination)
+        observe(document)
+        selectedDocumentID = document.id
     }
 
     func togglePreview() {
