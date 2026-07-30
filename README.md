@@ -2,7 +2,7 @@
 
 LacEditor 是一款面向 macOS 14 及以上版本的轻量原生文本编辑器。工程使用 SwiftUI 构建界面，以 AppKit `NSTextView` 提供编辑能力，并使用 WebKit 在本地呈现 Markdown 预览。应用不需要登录、云同步或网络权限，也不采集用户内容。
 
-当前版本：`0.2.0 (2)`
+当前版本：`0.3.0 (3)`
 
 ## 构建
 
@@ -27,6 +27,8 @@ swiftc \
   LacEditor/Services/TextSearchService.swift \
   LacEditor/Editor/FoldService.swift \
   LacEditor/Editor/ListContinuationService.swift \
+  LacEditor/Editor/LogicalLineIndex.swift \
+  LacEditor/Editor/SyntaxHighlighter.swift \
   LacEditor/Preview/MarkdownRenderer.swift \
   Verification/main.swift \
   -o .build/core-verification
