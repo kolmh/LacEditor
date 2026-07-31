@@ -261,6 +261,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
             context.coordinator.previousDelegate = window.delegate
             window.delegate = context.coordinator
             window.title = appState.windowTitle
+            configureEditorWindowChrome(window)
             windowManager.register(windowID: windowID, state: appState, window: window)
         }
         return view
@@ -268,6 +269,9 @@ struct WindowCloseCoordinator: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {
         nsView.window?.title = appState.windowTitle
+        if let window = nsView.window {
+            configureEditorWindowChrome(window)
+        }
         if let window = nsView.window, appState.hostWindow !== window {
             windowManager.register(windowID: windowID, state: appState, window: window)
         }
@@ -302,4 +306,13 @@ struct WindowCloseCoordinator: NSViewRepresentable {
             previousDelegate?.windowWillClose?(notification)
         }
     }
+}
+
+@MainActor
+func configureEditorWindowChrome(_ window: NSWindow) {
+    window.titleVisibility = .hidden
+    window.titlebarAppearsTransparent = false
+    window.backgroundColor = .windowBackgroundColor
+    window.toolbarStyle = .unifiedCompact
+    window.toolbar?.showsBaselineSeparator = false
 }

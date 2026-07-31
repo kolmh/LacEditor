@@ -4,33 +4,26 @@ struct LacEditorToolbar: ToolbarContent {
     @EnvironmentObject private var appState: AppState
 
     var body: some ToolbarContent {
-        ToolbarItem(placement: .navigation) {
-            Button {
-                appState.toggleSidebar()
-            } label: {
-                Image(systemName: "sidebar.left")
+        if #available(macOS 26.0, *) {
+            ToolbarItem(placement: .navigation) {
+                sidebarToggle
             }
-            .accessibilityLabel(appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏")
-            .stableHelp(
-                appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏",
-                shortcut: "⌃⌘S"
-            )
-            .onHover(perform: appState.sidebarPreviewHoverChanged)
-        }
+            .sharedBackgroundVisibility(.hidden)
 
-        ToolbarItem(placement: .navigation) {
-            Text(appState.windowTitle)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: 320, alignment: .leading)
-                .padding(.leading, appState.isSidebarVisible ? 144 : 0)
-                .animation(
-                    .easeOut(duration: 0.18),
-                    value: appState.isSidebarVisible
-                )
-                .accessibilityAddTraits(.isHeader)
+            ToolbarItem(placement: .navigation) {
+                windowTitle
+            }
+            .sharedBackgroundVisibility(.hidden)
+
+            ToolbarSpacer(.flexible)
+        } else {
+            ToolbarItem(placement: .navigation) {
+                sidebarToggle
+            }
+
+            ToolbarItem(placement: .navigation) {
+                windowTitle
+            }
         }
 
         ToolbarItemGroup(placement: .primaryAction) {
@@ -85,6 +78,36 @@ struct LacEditorToolbar: ToolbarContent {
                 }
             }
         }
+    }
+
+    private var sidebarToggle: some View {
+        Button {
+            appState.toggleSidebar()
+        } label: {
+            Image(systemName: "sidebar.left")
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏")
+        .stableHelp(
+            appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏",
+            shortcut: "⌃⌘S"
+        )
+        .onHover(perform: appState.sidebarPreviewHoverChanged)
+    }
+
+    private var windowTitle: some View {
+        Text(appState.windowTitle)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .frame(maxWidth: 320, alignment: .leading)
+            .padding(.leading, appState.isSidebarVisible ? 144 : 0)
+            .animation(
+                .easeOut(duration: 0.18),
+                value: appState.isSidebarVisible
+            )
+            .accessibilityAddTraits(.isHeader)
     }
 
     private func post(_ name: Notification.Name, documentID: UUID) {

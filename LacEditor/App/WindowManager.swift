@@ -92,8 +92,7 @@ final class WindowManager: ObservableObject {
             .fullSizeContentView
         ]
         window.title = state.windowTitle
-        window.titleVisibility = .hidden
-        window.toolbarStyle = .unifiedCompact
+        configureEditorWindowChrome(window)
         window.setContentSize(NSSize(width: 1120, height: 720))
         window.minSize = NSSize(width: 900, height: 560)
         if let screenPoint {
