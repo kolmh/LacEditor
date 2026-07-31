@@ -17,11 +17,14 @@ struct TabBarView: View {
     @State private var dropTargetPosition: TabDropPosition?
     @State private var canScrollLeading = false
     @State private var canScrollTrailing = false
+    @State private var isAddButtonHovering = false
+    private let barHeight: CGFloat = 32
+    private let endDropZoneWidth: CGFloat = 18
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 4) {
             ScrollViewReader { proxy in
-                GeometryReader { _ in
+                GeometryReader { geometry in
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 0) {
                             ForEach(appState.documents) { document in
@@ -83,12 +86,19 @@ struct TabBarView: View {
                                                 edge: edge
                                             )
                                         )
-                                    }
+                                    },
+                                    showsTrailingSeparator: showsTrailingSeparator(
+                                        after: document
+                                    )
+                                )
+                                .frame(
+                                    width: tabWidth(in: geometry.size.width),
+                                    height: barHeight
                                 )
                                 .id(document.id)
                                 .transition(.asymmetric(
-                                    insertion: .offset(x: 12).combined(with: .opacity),
-                                    removal: .scale(scale: 0.96).combined(with: .opacity)
+                                    insertion: .offset(x: 8).combined(with: .opacity),
+                                    removal: .scale(scale: 0.98).combined(with: .opacity)
                                 ))
                                 .contextMenu {
                                     Button("关闭") { appState.close(document) }
@@ -136,10 +146,10 @@ struct TabBarView: View {
                                     )
                                 }
                             )
-                            .frame(width: 28, height: 36)
+                            .frame(width: endDropZoneWidth, height: barHeight)
                         }
                         .animation(
-                            .smooth(duration: 0.24),
+                            .smooth(duration: 0.2),
                             value: appState.documents.map(\.id)
                         )
                     }
@@ -173,22 +183,52 @@ struct TabBarView: View {
                 }
             }
 
-            Divider()
-                .frame(height: 20)
-
             Button {
                 appState.newDocument()
             } label: {
                 Image(systemName: "plus")
-                    .frame(width: 34, height: 34)
+                    .font(.system(size: 11, weight: .medium))
+                    .frame(width: 26, height: 26)
+                    .background {
+                        Circle()
+                            .fill(
+                                Color.primary.opacity(
+                                    isAddButtonHovering ? 0.09 : 0.035
+                                )
+                            )
+                    }
+                    .contentShape(Circle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
+            .foregroundStyle(isAddButtonHovering ? .primary : .secondary)
+            .onHover { isAddButtonHovering = $0 }
             .stableHelp("新建标签页", shortcut: "⌘T")
+            .padding(.trailing, 5)
         }
         .coordinateSpace(name: "tabBar")
-        .frame(height: 36)
-        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
+        .frame(height: barHeight)
+        .background(.ultraThinMaterial)
+    }
+
+    private func tabWidth(in availableWidth: CGFloat) -> CGFloat {
+        let count = CGFloat(max(1, appState.documents.count))
+        let flexibleWidth = max(0, availableWidth - endDropZoneWidth) / count
+        return min(220, max(132, flexibleWidth))
+    }
+
+    private func showsTrailingSeparator(after document: EditorDocument) -> Bool {
+        guard let index = appState.documents.firstIndex(where: {
+            $0.id == document.id
+        }) else {
+            return false
+        }
+        let nextIndex = appState.documents.index(after: index)
+        guard appState.documents.indices.contains(nextIndex) else {
+            return false
+        }
+        let selectedID = appState.selectedDocumentID
+        return document.id != selectedID
+            && appState.documents[nextIndex].id != selectedID
     }
 
     private func insertionTarget(
@@ -210,10 +250,10 @@ struct TabBarView: View {
     private func edgeFade(isLeading: Bool) -> some View {
         LinearGradient(
             colors: [
-                Color(nsColor: .controlBackgroundColor).opacity(0.98),
-                Color(nsColor: .controlBackgroundColor).opacity(0.78),
-                Color(nsColor: .controlBackgroundColor).opacity(0.3),
-                Color(nsColor: .controlBackgroundColor).opacity(0)
+                Color(nsColor: .windowBackgroundColor).opacity(0.98),
+                Color(nsColor: .windowBackgroundColor).opacity(0.8),
+                Color(nsColor: .windowBackgroundColor).opacity(0.32),
+                Color(nsColor: .windowBackgroundColor).opacity(0)
             ],
             startPoint: isLeading ? .leading : .trailing,
             endPoint: isLeading ? .trailing : .leading
@@ -235,29 +275,42 @@ private struct EditorTabView: View {
     let dropTargetChanged: (TabDropEdge) -> Void
     let dropExited: (TabDropEdge) -> Void
     let acceptDrop: (TabDropEdge) -> Bool
+    let showsTrailingSeparator: Bool
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isHovering = false
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 6) {
             Image(systemName: document.language.icon)
                 .font(.system(size: 11))
                 .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .frame(width: 14, height: 14)
 
             Text(document.displayName)
-                .font(.system(size: 12))
+                .font(.system(size: 12, weight: isSelected ? .medium : .regular))
+                .foregroundStyle(isSelected ? .primary : .secondary)
                 .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity)
 
-            if document.isDirty {
+            ZStack {
                 Circle()
-                    .fill(Color.secondary)
+                    .fill(Color.accentColor.opacity(0.82))
                     .frame(width: 6, height: 6)
+                    .opacity(document.isDirty ? 1 : 0)
                     .accessibilityLabel("未保存")
+                    .accessibilityHidden(!document.isDirty)
             }
+            .frame(width: 8, height: 18)
 
             Button(action: close) {
                 Image(systemName: "xmark")
                     .font(.system(size: 9, weight: .semibold))
                     .frame(width: 18, height: 18)
+                    .background {
+                        Circle()
+                            .fill(Color.primary.opacity(isHovering ? 0.06 : 0))
+                    }
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -267,27 +320,46 @@ private struct EditorTabView: View {
             .accessibilityHidden(!isHovering)
             .stableHelp("关闭标签页", shortcut: "⌘W")
         }
-        .padding(.leading, 11)
-        .padding(.trailing, 7)
-        .frame(minWidth: 128, maxWidth: 178, minHeight: 36)
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
         .background {
             if isSelected {
-                Color(nsColor: .lacEditorBackground)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        colorScheme == .dark
+                            ? Color.white.opacity(0.075)
+                            : Color(nsColor: .controlBackgroundColor).opacity(0.92)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(
+                                Color(nsColor: .separatorColor).opacity(0.62),
+                                lineWidth: 0.65
+                            )
+                    }
+                    .shadow(
+                        color: Color.black.opacity(
+                            colorScheme == .dark ? 0.16 : 0.06
+                        ),
+                        radius: 1.5,
+                        y: 0.5
+                    )
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 3)
             } else if isHovering {
-                Color.primary.opacity(0.045)
-            }
-        }
-        .overlay(alignment: .bottom) {
-            if isSelected {
-                Rectangle()
-                    .fill(Color.accentColor)
-                    .frame(height: 2)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.045))
+                    .padding(.horizontal, 2)
+                    .padding(.vertical, 3)
             }
         }
         .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(Color(nsColor: .separatorColor))
-                .frame(width: 1)
+            if showsTrailingSeparator, !isHovering {
+                Rectangle()
+                    .fill(Color(nsColor: .separatorColor).opacity(0.58))
+                    .frame(width: 1, height: 16)
+            }
         }
         .overlay(alignment: .leading) {
             if dropTargetEdge == .leading {
@@ -330,7 +402,8 @@ private struct EditorTabView: View {
         .contentShape(Rectangle())
         .opacity(isDragging ? 0.48 : 1)
         .scaleEffect(isDragging ? 0.98 : 1)
-        .animation(.easeInOut(duration: 0.16), value: isSelected)
+        .animation(.easeInOut(duration: 0.14), value: isSelected)
+        .animation(.easeOut(duration: 0.1), value: isHovering)
         .animation(.easeOut(duration: 0.12), value: isDragging)
         .animation(.easeOut(duration: 0.1), value: dropTargetEdge)
         .onTapGesture(perform: select)
@@ -551,31 +624,31 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
     }
 
     private func dragImage() -> NSImage {
-        let size = NSSize(width: max(128, bounds.width + 31), height: 36)
+        let size = NSSize(width: max(132, bounds.width + 31), height: 32)
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
 
-        let rect = NSRect(origin: .zero, size: size).insetBy(dx: 3, dy: 3)
+        let rect = NSRect(origin: .zero, size: size).insetBy(dx: 2, dy: 2)
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.22)
-        shadow.shadowBlurRadius = 7
-        shadow.shadowOffset = NSSize(width: 0, height: -2)
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.16)
+        shadow.shadowBlurRadius = 5
+        shadow.shadowOffset = NSSize(width: 0, height: -1)
         shadow.set()
 
         NSColor.windowBackgroundColor.withAlphaComponent(0.98).setFill()
-        NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
+        NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
         NSGraphicsContext.current?.saveGraphicsState()
         NSShadow().set()
         NSColor.separatorColor.setStroke()
-        NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).stroke()
+        NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).stroke()
 
         if let icon = NSImage(
             systemSymbolName: iconName,
             accessibilityDescription: nil
         ) {
             icon.draw(
-                in: NSRect(x: 13, y: 11, width: 14, height: 14),
+                in: NSRect(x: 12, y: 9, width: 14, height: 14),
                 from: .zero,
                 operation: .sourceOver,
                 fraction: 0.78
@@ -583,8 +656,8 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
         }
 
         let titleRect = NSRect(
-            x: 34,
-            y: 9,
+            x: 33,
+            y: 7,
             width: max(20, size.width - (isDirty ? 58 : 43)),
             height: 17
         )
@@ -599,7 +672,7 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
         if isDirty {
             NSColor.secondaryLabelColor.setFill()
             NSBezierPath(
-                ovalIn: NSRect(x: size.width - 18, y: 15, width: 6, height: 6)
+                ovalIn: NSRect(x: size.width - 17, y: 13, width: 6, height: 6)
             ).fill()
         }
         NSGraphicsContext.current?.restoreGraphicsState()

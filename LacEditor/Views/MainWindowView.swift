@@ -90,8 +90,16 @@ struct MainWindowView: View {
     @ViewBuilder
     private var editorWorkspace: some View {
         VStack(spacing: 0) {
-            TabBarView()
-            Divider()
+            if showsTabBar {
+                VStack(spacing: 0) {
+                    TabBarView()
+                    Divider()
+                }
+                .transition(
+                    .move(edge: .top)
+                        .combined(with: .opacity)
+                )
+            }
             if let selectedDocument = appState.selectedDocument {
                 ZStack {
                     ForEach(loadedDocuments) { document in
@@ -118,7 +126,12 @@ struct MainWindowView: View {
                 }
             }
         }
+        .animation(.easeInOut(duration: 0.16), value: showsTabBar)
         .animation(.easeInOut(duration: 0.18), value: appState.isStatusBarVisible)
+    }
+
+    private var showsTabBar: Bool {
+        appState.documents.count > 1
     }
 
     private var loadedDocuments: [EditorDocument] {
