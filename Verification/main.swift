@@ -139,6 +139,53 @@ require(
         == .literal,
     "unterminated JavaScript string stops at the line boundary"
 )
+let javascriptRegexSyntax = #"""
+const csvEscape = (val) => {
+  const s = String(val);
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+};
+
+const cleanText = (text) => {
+  let t = String(text);
+};
+"""#
+require(
+    effectiveSyntaxKind(#"/[",\n\r]/"#, in: javascriptRegexSyntax, language: .javascript)
+        == .string,
+    "JavaScript regex character class protects embedded quotes"
+)
+require(
+    effectiveSyntaxKind(#"/"/g"#, in: javascriptRegexSyntax, language: .javascript)
+        == .string,
+    "JavaScript regex literal inside a function call"
+)
+require(
+    effectiveSyntaxKind("return s;", in: javascriptRegexSyntax, language: .javascript)
+        == .keyword,
+    "JavaScript highlighting resumes after a regex literal"
+)
+require(
+    effectiveSyntaxKind("let t", in: javascriptRegexSyntax, language: .javascript)
+        == .keyword,
+    "JavaScript highlighting remains correct in the following function"
+)
+let escapedSlashRegex = #"const protocol = /https?:\/\//; // URL scheme"#
+require(
+    effectiveSyntaxKind(#"/https?:\/\//"#, in: escapedSlashRegex, language: .javascript)
+        == .string,
+    "escaped slashes inside a JavaScript regex are not comments"
+)
+require(
+    effectiveSyntaxKind("// URL", in: escapedSlashRegex, language: .javascript)
+        == .comment,
+    "JavaScript comments still begin after a regex literal"
+)
+let javascriptDivision = "const ratio = total / count;"
+require(
+    effectiveSyntaxKind("/", in: javascriptDivision, language: .javascript) == nil,
+    "JavaScript division is not classified as a regex or comment"
+)
 require(
     effectiveSyntaxKind("interface", in: "interface Item { value: string }", language: .typescript)
         == .keyword,

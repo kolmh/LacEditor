@@ -1,10 +1,20 @@
 import AppKit
 import SwiftUI
 
+private enum TabDropEdge {
+    case leading
+    case trailing
+}
+
+private struct TabDropPosition: Equatable {
+    let documentID: UUID
+    let edge: TabDropEdge
+}
+
 struct TabBarView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var windowManager: WindowManager
-    @State private var dropTargetDocumentID: UUID?
+    @State private var dropTargetPosition: TabDropPosition?
     @State private var canScrollLeading = false
     @State private var canScrollTrailing = false
 
@@ -19,8 +29,10 @@ struct TabBarView: View {
                                     document: document,
                                     isSelected: appState.selectedDocumentID == document.id,
                                     isDragging: windowManager.draggedDocumentID == document.id,
-                                    isDropTarget: dropTargetDocumentID == document.id
-                                        && windowManager.draggedDocumentID != document.id,
+                                    dropTargetEdge: dropTargetPosition?.documentID == document.id
+                                        && windowManager.draggedDocumentID != document.id
+                                        ? dropTargetPosition?.edge
+                                        : nil,
                                     select: { appState.selectedDocumentID = document.id },
                                     close: { appState.close(document) },
                                     beginDrag: {
@@ -30,30 +42,46 @@ struct TabBarView: View {
                                         )
                                     },
                                     finishDrag: { screenPoint in
-                                        dropTargetDocumentID = nil
+                                        dropTargetPosition = nil
                                         windowManager.finishTabDrag(at: screenPoint)
                                     },
-                                    dropEntered: {
-                                        dropTargetDocumentID = document.id
+                                    dropTargetChanged: { edge in
+                                        dropTargetPosition = TabDropPosition(
+                                            documentID: document.id,
+                                            edge: edge
+                                        )
                                         windowManager.setTabDragTarget(
                                             in: appState,
-                                            before: document.id
+                                            before: insertionTarget(
+                                                for: document,
+                                                edge: edge
+                                            )
                                         )
                                     },
-                                    dropExited: {
-                                        if dropTargetDocumentID == document.id {
-                                            dropTargetDocumentID = nil
+                                    dropExited: { edge in
+                                        let position = TabDropPosition(
+                                            documentID: document.id,
+                                            edge: edge
+                                        )
+                                        if dropTargetPosition == position {
+                                            dropTargetPosition = nil
                                         }
                                         windowManager.clearTabDragTarget(
                                             in: appState,
-                                            before: document.id
+                                            before: insertionTarget(
+                                                for: document,
+                                                edge: edge
+                                            )
                                         )
                                     },
-                                    acceptDrop: {
-                                        dropTargetDocumentID = nil
+                                    acceptDrop: { edge in
+                                        dropTargetPosition = nil
                                         return windowManager.acceptTabDrag(
                                             into: appState,
-                                            before: document.id
+                                            before: insertionTarget(
+                                                for: document,
+                                                edge: edge
+                                            )
                                         )
                                     }
                                 )
@@ -78,19 +106,30 @@ struct TabBarView: View {
                                     windowManager.draggedDocumentID != nil
                                 },
                                 dropEntered: {
+                                    if let lastDocument = appState.documents.last {
+                                        dropTargetPosition = TabDropPosition(
+                                            documentID: lastDocument.id,
+                                            edge: .trailing
+                                        )
+                                    }
                                     windowManager.setTabDragTarget(
                                         in: appState,
                                         before: nil
                                     )
                                 },
                                 dropExited: {
+                                    if dropTargetPosition?.documentID
+                                        == appState.documents.last?.id,
+                                       dropTargetPosition?.edge == .trailing {
+                                        dropTargetPosition = nil
+                                    }
                                     windowManager.clearTabDragTarget(
                                         in: appState,
                                         before: nil
                                     )
                                 },
                                 acceptDrop: {
-                                    dropTargetDocumentID = nil
+                                    dropTargetPosition = nil
                                     return windowManager.acceptTabDrag(
                                         into: appState,
                                         before: nil
@@ -152,6 +191,22 @@ struct TabBarView: View {
         .background(Color(nsColor: .controlBackgroundColor).opacity(0.55))
     }
 
+    private func insertionTarget(
+        for document: EditorDocument,
+        edge: TabDropEdge
+    ) -> UUID? {
+        guard edge == .trailing,
+              let index = appState.documents.firstIndex(where: {
+                  $0.id == document.id
+              }) else {
+            return document.id
+        }
+        let nextIndex = appState.documents.index(after: index)
+        return appState.documents.indices.contains(nextIndex)
+            ? appState.documents[nextIndex].id
+            : nil
+    }
+
     private func edgeFade(isLeading: Bool) -> some View {
         LinearGradient(
             colors: [
@@ -172,14 +227,14 @@ private struct EditorTabView: View {
     @ObservedObject var document: EditorDocument
     let isSelected: Bool
     let isDragging: Bool
-    let isDropTarget: Bool
+    let dropTargetEdge: TabDropEdge?
     let select: () -> Void
     let close: () -> Void
     let beginDrag: () -> Void
     let finishDrag: (NSPoint) -> Void
-    let dropEntered: () -> Void
-    let dropExited: () -> Void
-    let acceptDrop: () -> Bool
+    let dropTargetChanged: (TabDropEdge) -> Void
+    let dropExited: (TabDropEdge) -> Void
+    let acceptDrop: (TabDropEdge) -> Bool
     @State private var isHovering = false
 
     var body: some View {
@@ -235,7 +290,15 @@ private struct EditorTabView: View {
                 .frame(width: 1)
         }
         .overlay(alignment: .leading) {
-            if isDropTarget {
+            if dropTargetEdge == .leading {
+                Rectangle()
+                    .fill(Color.accentColor)
+                    .frame(width: 2, height: 26)
+                    .transition(.opacity)
+            }
+        }
+        .overlay(alignment: .trailing) {
+            if dropTargetEdge == .trailing {
                 Rectangle()
                     .fill(Color.accentColor)
                     .frame(width: 2, height: 26)
@@ -254,7 +317,7 @@ private struct EditorTabView: View {
                         beginDrag: beginDrag,
                         finishDrag: finishDrag,
                         canAcceptDrop: { !isDragging },
-                        dropEntered: dropEntered,
+                        dropTargetChanged: dropTargetChanged,
                         dropExited: dropExited,
                         acceptDrop: acceptDrop
                     )
@@ -269,7 +332,7 @@ private struct EditorTabView: View {
         .scaleEffect(isDragging ? 0.98 : 1)
         .animation(.easeInOut(duration: 0.16), value: isSelected)
         .animation(.easeOut(duration: 0.12), value: isDragging)
-        .animation(.easeOut(duration: 0.1), value: isDropTarget)
+        .animation(.easeOut(duration: 0.1), value: dropTargetEdge)
         .onTapGesture(perform: select)
         .onHover { isHovering = $0 }
     }
@@ -284,9 +347,9 @@ private struct NativeTabDragHandle: NSViewRepresentable {
     let beginDrag: () -> Void
     let finishDrag: (NSPoint) -> Void
     let canAcceptDrop: () -> Bool
-    let dropEntered: () -> Void
-    let dropExited: () -> Void
-    let acceptDrop: () -> Bool
+    let dropTargetChanged: (TabDropEdge) -> Void
+    let dropExited: (TabDropEdge) -> Void
+    let acceptDrop: (TabDropEdge) -> Bool
 
     func makeNSView(context: Context) -> TabDragHandleView {
         let view = TabDragHandleView()
@@ -307,7 +370,7 @@ private struct NativeTabDragHandle: NSViewRepresentable {
         view.onDragBegan = beginDrag
         view.onDragEnded = finishDrag
         view.canAcceptDrop = canAcceptDrop
-        view.onDropEntered = dropEntered
+        view.onDropTargetChanged = dropTargetChanged
         view.onDropExited = dropExited
         view.onAcceptDrop = acceptDrop
     }
@@ -322,12 +385,13 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
     var onDragBegan: (() -> Void)?
     var onDragEnded: ((NSPoint) -> Void)?
     var canAcceptDrop: (() -> Bool)?
-    var onDropEntered: (() -> Void)?
-    var onDropExited: (() -> Void)?
-    var onAcceptDrop: (() -> Bool)?
+    var onDropTargetChanged: ((TabDropEdge) -> Void)?
+    var onDropExited: ((TabDropEdge) -> Void)?
+    var onAcceptDrop: ((TabDropEdge) -> Bool)?
 
     private var mouseDownLocation: NSPoint?
     private var hasStartedDragging = false
+    private var activeDropEdge: TabDropEdge?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -433,26 +497,50 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
         _ sender: any NSDraggingInfo
     ) -> NSDragOperation {
         guard accepts(sender) else { return [] }
-        onDropEntered?()
+        updateDropTarget(for: sender)
         return .move
     }
 
     override func draggingUpdated(
         _ sender: any NSDraggingInfo
     ) -> NSDragOperation {
-        accepts(sender) ? .move : []
+        guard accepts(sender) else { return [] }
+        updateDropTarget(for: sender)
+        return .move
     }
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
-        onDropExited?()
+        clearDropTarget()
     }
 
     override func performDragOperation(
         _ sender: any NSDraggingInfo
     ) -> Bool {
         guard accepts(sender) else { return false }
-        onDropExited?()
-        return onAcceptDrop?() ?? false
+        let edge = activeDropEdge ?? dropEdge(for: sender)
+        activeDropEdge = nil
+        return onAcceptDrop?(edge) ?? false
+    }
+
+    private func updateDropTarget(for sender: any NSDraggingInfo) {
+        let edge = dropEdge(for: sender)
+        guard edge != activeDropEdge else { return }
+        if let previousEdge = activeDropEdge {
+            onDropExited?(previousEdge)
+        }
+        activeDropEdge = edge
+        onDropTargetChanged?(edge)
+    }
+
+    private func clearDropTarget() {
+        guard let edge = activeDropEdge else { return }
+        activeDropEdge = nil
+        onDropExited?(edge)
+    }
+
+    private func dropEdge(for sender: any NSDraggingInfo) -> TabDropEdge {
+        let point = convert(sender.draggingLocation, from: nil)
+        return point.x < bounds.midX ? .leading : .trailing
     }
 
     private func accepts(_ sender: any NSDraggingInfo) -> Bool {

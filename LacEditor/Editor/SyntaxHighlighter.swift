@@ -50,6 +50,7 @@ enum SyntaxHighlighter {
         var lineCommentRequiresBoundary = false
         var blockComment: (start: String, end: String)?
         var strings: [StringDelimiter] = []
+        var supportsJavaScriptRegexLiterals = false
     }
 
     private static let contextPadding = 64 * 1_024
@@ -340,6 +341,26 @@ enum SyntaxHighlighter {
                 continue
             }
 
+            if configuration.supportsJavaScriptRegexLiterals,
+               string.character(at: location) == 0x2F,
+               isJavaScriptRegexStart(
+                   in: string,
+                   at: location,
+                   lowerBound: range.location
+               ) {
+                let tokenEnd = javascriptRegexEnd(
+                    in: string,
+                    from: location,
+                    limit: end
+                )
+                result.append(Token(
+                    range: NSRange(location: location, length: tokenEnd - location),
+                    kind: .string
+                ))
+                location = tokenEnd
+                continue
+            }
+
             if let delimiter = delimiters.first(where: {
                 hasPrefix($0.value, in: string, at: location, limit: end)
             }) {
@@ -359,6 +380,111 @@ enum SyntaxHighlighter {
             location += 1
         }
         return result
+    }
+
+    private static func isJavaScriptRegexStart(
+        in string: NSString,
+        at location: Int,
+        lowerBound: Int
+    ) -> Bool {
+        var previous = location - 1
+        while previous >= lowerBound,
+              CharacterSet.whitespacesAndNewlines.contains(
+                  UnicodeScalar(string.character(at: previous))!
+              ) {
+            previous -= 1
+        }
+        guard previous >= lowerBound else { return true }
+
+        let character = string.character(at: previous)
+        if character == 0x2B || character == 0x2D {
+            if previous > lowerBound,
+               string.character(at: previous - 1) == character {
+                return false
+            }
+            return true
+        }
+
+        switch character {
+        case 0x28, 0x5B, 0x7B, // ([{
+             0x2C, 0x3B, 0x3A, // ,;:
+             0x3D, 0x21, 0x3F, // =!?
+             0x26, 0x7C,       // &|
+             0x2A, 0x25, 0x7E, 0x5E, // *%~^
+             0x3C, 0x3E:       // <>
+            return true
+        default:
+            break
+        }
+
+        guard isJavaScriptIdentifierCharacter(character) else {
+            return false
+        }
+        var wordStart = previous
+        while wordStart > lowerBound,
+              isJavaScriptIdentifierCharacter(
+                  string.character(at: wordStart - 1)
+              ) {
+            wordStart -= 1
+        }
+        let word = string.substring(with: NSRange(
+            location: wordStart,
+            length: previous - wordStart + 1
+        ))
+        return javascriptRegexPrefixKeywords.contains(word)
+    }
+
+    private static func javascriptRegexEnd(
+        in string: NSString,
+        from start: Int,
+        limit: Int
+    ) -> Int {
+        var location = start + 1
+        var isInsideCharacterClass = false
+
+        while location < limit {
+            let character = string.character(at: location)
+            if isLineTerminator(character) {
+                return location
+            }
+            if character == 0x5C {
+                location = min(limit, location + 2)
+                continue
+            }
+            if character == 0x5B {
+                isInsideCharacterClass = true
+            } else if character == 0x5D {
+                isInsideCharacterClass = false
+            } else if character == 0x2F, !isInsideCharacterClass {
+                location += 1
+                while location < limit,
+                      isJavaScriptRegexFlag(string.character(at: location)) {
+                    location += 1
+                }
+                return location
+            }
+            location += 1
+        }
+        return limit
+    }
+
+    private static func isJavaScriptIdentifierCharacter(
+        _ character: unichar
+    ) -> Bool {
+        (character >= 0x41 && character <= 0x5A)
+            || (character >= 0x61 && character <= 0x7A)
+            || (character >= 0x30 && character <= 0x39)
+            || character == 0x24
+            || character == 0x5F
+    }
+
+    private static func isJavaScriptRegexFlag(_ character: unichar) -> Bool {
+        switch character {
+        case 0x64, 0x67, 0x69, 0x6D, 0x73, 0x75, 0x76, 0x79:
+            return true
+        default:
+            return false
+        }
     }
 
     private static func stringEnd(
@@ -634,7 +760,8 @@ enum SyntaxHighlighter {
                         allowsDoubledDelimiter: false,
                         allowsLineBreaks: true
                     )
-                ]
+                ],
+                supportsJavaScriptRegexLiterals: true
             )
         case .css:
             return LexicalConfiguration(
@@ -969,4 +1096,20 @@ enum SyntaxHighlighter {
     private static let htmlAttributeExpression = try! NSRegularExpression(
         pattern: #"\s([A-Za-z_:][-A-Za-z0-9_:.]*)(?=\s*(?:=|/?>))"#
     )
+    private static let javascriptRegexPrefixKeywords: Set<String> = [
+        "await",
+        "case",
+        "delete",
+        "do",
+        "else",
+        "in",
+        "instanceof",
+        "new",
+        "of",
+        "return",
+        "throw",
+        "typeof",
+        "void",
+        "yield"
+    ]
 }

@@ -34,7 +34,14 @@ struct EditorSelectionRequest {
 final class AppState: ObservableObject {
     @Published var documents: [EditorDocument] = []
     @Published var selectedDocumentID: UUID?
-    @Published var isSidebarVisible = true
+    @Published var isSidebarVisible: Bool {
+        didSet {
+            UserDefaults.standard.set(
+                isSidebarVisible,
+                forKey: "isSidebarVisible"
+            )
+        }
+    }
     @Published private(set) var isSidebarPreviewVisible = false
     @Published var workspaceURL: URL?
     @Published var fileTree: [FileTreeNode] = []
@@ -74,6 +81,9 @@ final class AppState: ObservableObject {
         recentFiles: RecentFilesStore
     ) {
         self.recentFiles = recentFiles
+        isSidebarVisible = UserDefaults.standard.object(
+            forKey: "isSidebarVisible"
+        ) as? Bool ?? true
         isLineNumbersVisible = UserDefaults.standard.object(
             forKey: "isLineNumbersVisible"
         ) as? Bool ?? true
