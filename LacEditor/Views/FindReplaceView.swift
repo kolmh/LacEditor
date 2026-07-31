@@ -1,24 +1,31 @@
+import AppKit
 import SwiftUI
 
 struct FindReplaceView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var state: FindReplaceState
     @FocusState private var focusedField: Field?
+    private let close: () -> Void
+    private let modeChanged: (FindReplaceMode) -> Void
 
     private enum Field {
         case query
         case replacement
     }
 
-    init(state: FindReplaceState) {
+    init(
+        state: FindReplaceState,
+        close: @escaping () -> Void,
+        modeChanged: @escaping (FindReplaceMode) -> Void
+    ) {
         _state = ObservedObject(wrappedValue: state)
+        self.close = close
+        self.modeChanged = modeChanged
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("查找与替换")
-                    .font(.system(size: 15, weight: .semibold))
                 Spacer()
                 Picker("模式", selection: $state.mode) {
                     ForEach(FindReplaceMode.allCases) { mode in
@@ -69,7 +76,7 @@ struct FindReplaceView: View {
                 }
                 Spacer()
                 Button("关闭") {
-                    appState.isFindReplacePresented = false
+                    close()
                 }
                 .keyboardShortcut(.cancelAction)
                 Button {
@@ -94,7 +101,127 @@ struct FindReplaceView: View {
         .padding(20)
         .frame(width: 520, height: state.mode == .replace ? 260 : 220)
         .onAppear {
+            focusQueryField()
+        }
+        .onChange(of: state.focusRequestID) {
+            focusQueryField()
+        }
+        .onChange(of: state.mode) { _, mode in
+            modeChanged(mode)
+        }
+    }
+
+    private func focusQueryField() {
+        DispatchQueue.main.async {
             focusedField = .query
         }
     }
+}
+
+@MainActor
+final class FindReplacePanelController: NSWindowController, NSWindowDelegate {
+    private weak var state: FindReplaceState?
+    private var hasPositionedWindow = false
+
+    init(appState: AppState) {
+        let panel = FindReplacePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 220),
+            styleMask: [.titled, .closable, .utilityWindow],
+            backing: .buffered,
+            defer: false
+        )
+        super.init(window: panel)
+        state = appState.findReplace
+
+        panel.title = "查找与替换"
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = true
+        panel.animationBehavior = .utilityWindow
+        panel.collectionBehavior.insert(.fullScreenAuxiliary)
+        panel.delegate = self
+
+        panel.contentViewController = NSHostingController(
+            rootView: FindReplaceView(
+                state: appState.findReplace,
+                close: { [weak self] in
+                    self?.window?.performClose(nil)
+                },
+                modeChanged: { [weak self] mode in
+                    self?.resize(for: mode, animated: true)
+                }
+            )
+            .environmentObject(appState)
+        )
+    }
+
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    func present(mode: FindReplaceMode, relativeTo parentWindow: NSWindow) {
+        guard let panel = window else { return }
+        if panel.parent !== parentWindow {
+            panel.parent?.removeChildWindow(panel)
+            parentWindow.addChildWindow(panel, ordered: .above)
+        }
+
+        resize(for: mode, animated: panel.isVisible)
+        if !hasPositionedWindow {
+            position(over: parentWindow)
+            hasPositionedWindow = true
+        }
+        showWindow(nil)
+        panel.makeKeyAndOrderFront(nil)
+        state?.focusRequestID = UUID()
+    }
+
+    func dismiss() {
+        guard let panel = window else { return }
+        panel.parent?.removeChildWindow(panel)
+        panel.orderOut(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let panel = notification.object as? NSWindow else { return }
+        panel.parent?.removeChildWindow(panel)
+    }
+
+    private func resize(for mode: FindReplaceMode, animated: Bool) {
+        guard let panel = window else { return }
+        let contentSize = NSSize(
+            width: 520,
+            height: mode == .replace ? 260 : 220
+        )
+        let contentRect = NSRect(origin: .zero, size: contentSize)
+        let targetSize = panel.frameRect(forContentRect: contentRect).size
+        var frame = panel.frame
+        let top = frame.maxY
+        frame.size = targetSize
+        frame.origin.y = top - targetSize.height
+        panel.setFrame(frame, display: true, animate: animated)
+    }
+
+    private func position(over parentWindow: NSWindow) {
+        guard let panel = window else { return }
+        var origin = NSPoint(
+            x: parentWindow.frame.midX - panel.frame.width / 2,
+            y: parentWindow.frame.midY - panel.frame.height / 2
+        )
+        if let visibleFrame = parentWindow.screen?.visibleFrame {
+            origin.x = min(
+                max(origin.x, visibleFrame.minX),
+                visibleFrame.maxX - panel.frame.width
+            )
+            origin.y = min(
+                max(origin.y, visibleFrame.minY),
+                visibleFrame.maxY - panel.frame.height
+            )
+        }
+        panel.setFrameOrigin(origin)
+    }
+}
+
+private final class FindReplacePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
 }

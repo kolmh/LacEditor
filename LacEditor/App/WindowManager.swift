@@ -62,6 +62,7 @@ final class WindowManager: ObservableObject {
 
     func unregister(windowID: UUID) {
         let removedState = states.removeValue(forKey: windowID)
+        removedState?.dismissFindReplace()
         windowControllers.removeValue(forKey: windowID)
         if activeState === removedState {
             activeState = states.values.first

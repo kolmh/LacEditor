@@ -47,7 +47,6 @@ final class AppState: ObservableObject {
     @Published var fileTree: [FileTreeNode] = []
     @Published var isWordWrapEnabled = true
     @Published var editorFontSize: CGFloat = 14
-    @Published var isFindReplacePresented = false
     @Published var isLineNumbersVisible: Bool {
         didSet {
             UserDefaults.standard.set(
@@ -71,6 +70,7 @@ final class AppState: ObservableObject {
     let recentFiles: RecentFilesStore
     let findReplace = FindReplaceState()
     weak var hostWindow: NSWindow?
+    private var findReplacePanelController: FindReplacePanelController?
     private let fileService = FileService()
     private var documentCancellables: [UUID: AnyCancellable] = [:]
     private var sidebarPreviewDismissWorkItem: DispatchWorkItem?
@@ -369,7 +369,17 @@ final class AppState: ObservableObject {
     func presentFindReplace(mode: FindReplaceMode) {
         findReplace.mode = mode
         findReplace.message = nil
-        isFindReplacePresented = true
+        guard let hostWindow else { return }
+        let controller = findReplacePanelController ?? FindReplacePanelController(
+            appState: self
+        )
+        findReplacePanelController = controller
+        controller.present(mode: mode, relativeTo: hostWindow)
+    }
+
+    func dismissFindReplace() {
+        findReplacePanelController?.dismiss()
+        findReplacePanelController = nil
     }
 
     func findNext() {

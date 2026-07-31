@@ -35,10 +35,6 @@ struct MainWindowView: View {
         .toolbar {
             LacEditorToolbar()
         }
-        .sheet(isPresented: $appState.isFindReplacePresented) {
-            FindReplaceView(state: appState.findReplace)
-                .environmentObject(appState)
-        }
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 6)

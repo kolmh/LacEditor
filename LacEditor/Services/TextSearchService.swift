@@ -16,6 +16,7 @@ final class FindReplaceState: ObservableObject {
     @Published var interpretsEscapes = true
     @Published var isCaseSensitive = false
     @Published var message: String?
+    @Published var focusRequestID = UUID()
 }
 
 enum TextSearchService {
