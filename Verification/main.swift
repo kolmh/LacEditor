@@ -122,6 +122,23 @@ require(
         == .comment,
     "JavaScript line comment highlighting"
 )
+for separator in ["\n", "\r\n", "\r", "\u{2028}", "\u{2029}"] {
+    let source = "const first = true; // comment\(separator)const next = false;"
+    require(
+        effectiveSyntaxKind("comment", in: source, language: .javascript) == .comment,
+        "JavaScript comment starts before \(separator.debugDescription)"
+    )
+    require(
+        effectiveSyntaxKind("false", in: source, language: .javascript) == .literal,
+        "JavaScript comment ends at \(separator.debugDescription)"
+    )
+}
+let unterminatedJavaScriptString = "const value = \"unfinished\nconst next = true;"
+require(
+    effectiveSyntaxKind("true", in: unterminatedJavaScriptString, language: .javascript)
+        == .literal,
+    "unterminated JavaScript string stops at the line boundary"
+)
 require(
     effectiveSyntaxKind("interface", in: "interface Item { value: string }", language: .typescript)
         == .keyword,

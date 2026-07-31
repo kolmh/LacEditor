@@ -396,6 +396,15 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
         }
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        let scrollView = enclosingScrollView
+            ?? TabScrollViewLocator.find(for: event, in: window)
+        if scrollView?.scrollTabs(with: event) == true {
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
     func draggingSession(
         _ session: NSDraggingSession,
         sourceOperationMaskFor context: NSDraggingContext
@@ -549,6 +558,15 @@ private final class TabDropZoneView: NSView {
         nil
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        let scrollView = enclosingScrollView
+            ?? TabScrollViewLocator.find(for: event, in: window)
+        if scrollView?.scrollTabs(with: event) == true {
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
     override func draggingEntered(
         _ sender: any NSDraggingInfo
     ) -> NSDragOperation {
@@ -659,34 +677,26 @@ private final class HorizontalWheelMonitorView: NSView {
 
     private func handle(_ event: NSEvent) -> NSEvent? {
         guard let window,
-              event.window === window,
-              bounds.contains(convert(event.locationInWindow, from: nil)),
-              let scrollView = observedScrollView,
-              let documentView = scrollView.documentView
+              contains(event: event, in: window),
+              let scrollView = observedScrollView
         else {
             return event
         }
 
-        let clipView = scrollView.contentView
-        let maximumX = max(0, documentView.bounds.width - clipView.bounds.width)
-        guard maximumX > 0.5 else { return event }
-
-        let dominantDelta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
-            ? event.scrollingDeltaX
-            : event.scrollingDeltaY
-        guard abs(dominantDelta) > 0.001 else { return nil }
-
-        let multiplier: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 22
-        let targetX = min(
-            max(clipView.bounds.origin.x - dominantDelta * multiplier, 0),
-            maximumX
-        )
-        guard abs(targetX - clipView.bounds.origin.x) > 0.01 else { return nil }
-
-        clipView.scroll(to: NSPoint(x: targetX, y: clipView.bounds.origin.y))
-        scrollView.reflectScrolledClipView(clipView)
+        guard scrollView.scrollTabs(with: event) else { return event }
         publishMetrics(for: scrollView)
         return nil
+    }
+
+    private func contains(event: NSEvent, in window: NSWindow) -> Bool {
+        let screenPoint: NSPoint
+        if let eventWindow = event.window {
+            screenPoint = eventWindow.convertPoint(toScreen: event.locationInWindow)
+        } else {
+            screenPoint = NSEvent.mouseLocation
+        }
+        let pointInWindow = window.convertPoint(fromScreen: screenPoint)
+        return bounds.contains(convert(pointInWindow, from: nil))
     }
 
     private func attachToScrollView() {
@@ -695,8 +705,8 @@ private final class HorizontalWheelMonitorView: NSView {
             NSPoint(x: bounds.midX, y: bounds.midY),
             to: nil
         )
-        guard let scrollView = horizontalScrollView(
-            below: window.contentView,
+        guard let scrollView = TabScrollViewLocator.find(
+            in: window,
             at: centerInWindow
         ) else {
             publishMetrics(for: nil)
@@ -761,19 +771,35 @@ private final class HorizontalWheelMonitorView: NSView {
         onMetricsChanged?(currentX > 0.5, currentX < maximumX - 0.5)
     }
 
-    private func horizontalScrollView(below root: NSView?, at point: NSPoint) -> NSScrollView? {
-        guard let root else { return nil }
+}
+
+private enum TabScrollViewLocator {
+    static func find(for event: NSEvent, in window: NSWindow?) -> NSScrollView? {
+        guard let window else { return nil }
+        let pointInWindow: NSPoint
+        if let eventWindow = event.window {
+            let screenPoint = eventWindow.convertPoint(toScreen: event.locationInWindow)
+            pointInWindow = window.convertPoint(fromScreen: screenPoint)
+        } else {
+            pointInWindow = window.convertPoint(fromScreen: NSEvent.mouseLocation)
+        }
+        return find(in: window, at: pointInWindow)
+    }
+
+    static func find(in window: NSWindow, at point: NSPoint) -> NSScrollView? {
+        guard let root = window.contentView else { return nil }
+        return find(below: root, at: point)
+    }
+
+    private static func find(below root: NSView, at point: NSPoint) -> NSScrollView? {
         var candidates: [NSScrollView] = []
         collectScrollViews(in: root, point: point, result: &candidates)
         return candidates
-            .filter {
-                guard let documentView = $0.documentView else { return false }
-                return documentView.bounds.width > $0.contentView.bounds.width + 0.5
-            }
+            .filter { $0.documentView != nil }
             .min { $0.frame.height < $1.frame.height }
     }
 
-    private func collectScrollViews(
+    private static func collectScrollViews(
         in view: NSView,
         point: NSPoint,
         result: inout [NSScrollView]
@@ -787,5 +813,30 @@ private final class HorizontalWheelMonitorView: NSView {
         view.subviews.forEach {
             collectScrollViews(in: $0, point: point, result: &result)
         }
+    }
+}
+
+private extension NSScrollView {
+    func scrollTabs(with event: NSEvent) -> Bool {
+        guard let documentView else { return false }
+        let clipView = contentView
+        let maximumX = max(0, documentView.bounds.width - clipView.bounds.width)
+        guard maximumX > 0.5 else { return false }
+
+        let dominantDelta = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            ? event.scrollingDeltaX
+            : event.scrollingDeltaY
+        guard abs(dominantDelta) > 0.001 else { return true }
+
+        let multiplier: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 22
+        let targetX = min(
+            max(clipView.bounds.origin.x - dominantDelta * multiplier, 0),
+            maximumX
+        )
+        guard abs(targetX - clipView.bounds.origin.x) > 0.01 else { return true }
+
+        clipView.scroll(to: NSPoint(x: targetX, y: clipView.bounds.origin.y))
+        reflectScrolledClipView(clipView)
+        return true
     }
 }

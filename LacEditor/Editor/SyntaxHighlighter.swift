@@ -42,6 +42,7 @@ enum SyntaxHighlighter {
         let value: String
         let allowsBackslashEscapes: Bool
         let allowsDoubledDelimiter: Bool
+        let allowsLineBreaks: Bool
     }
 
     private struct LexicalConfiguration {
@@ -171,7 +172,8 @@ enum SyntaxHighlighter {
                 StringDelimiter(
                     value: "\"",
                     allowsBackslashEscapes: true,
-                    allowsDoubledDelimiter: false
+                    allowsDoubledDelimiter: false,
+                    allowsLineBreaks: false
                 )
             ])
         )
@@ -325,15 +327,11 @@ enum SyntaxHighlighter {
                     && (!configuration.lineCommentRequiresBoundary
                         || isCommentBoundary(in: string, at: location))
             }) {
-                let newline = string.range(
-                    of: "\n",
-                    options: [],
-                    range: NSRange(
-                        location: location + marker.utf16.count,
-                        length: max(0, end - location - marker.utf16.count)
-                    )
+                let tokenEnd = lineEnd(
+                    in: string,
+                    from: location + marker.utf16.count,
+                    limit: end
                 )
-                let tokenEnd = newline.location == NSNotFound ? end : newline.location
                 result.append(Token(
                     range: NSRange(location: location, length: tokenEnd - location),
                     kind: .comment
@@ -377,6 +375,10 @@ enum SyntaxHighlighter {
                 location = min(limit, location + 2)
                 continue
             }
+            if !delimiter.allowsLineBreaks,
+               isLineTerminator(string.character(at: location)) {
+                return location
+            }
             if hasPrefix(delimiter.value, in: string, at: location, limit: limit) {
                 if delimiter.allowsDoubledDelimiter,
                    hasPrefix(
@@ -393,6 +395,28 @@ enum SyntaxHighlighter {
             location += 1
         }
         return limit
+    }
+
+    private static func lineEnd(
+        in string: NSString,
+        from start: Int,
+        limit: Int
+    ) -> Int {
+        var location = start
+        while location < limit {
+            if isLineTerminator(string.character(at: location)) {
+                return location
+            }
+            location += 1
+        }
+        return limit
+    }
+
+    private static func isLineTerminator(_ character: unichar) -> Bool {
+        character == 0x0A
+            || character == 0x0D
+            || character == 0x2028
+            || character == 0x2029
     }
 
     private static func contextualRange(
@@ -584,12 +608,14 @@ enum SyntaxHighlighter {
         StringDelimiter(
             value: "\"",
             allowsBackslashEscapes: true,
-            allowsDoubledDelimiter: false
+            allowsDoubledDelimiter: false,
+            allowsLineBreaks: false
         ),
         StringDelimiter(
             value: "'",
             allowsBackslashEscapes: true,
-            allowsDoubledDelimiter: false
+            allowsDoubledDelimiter: false,
+            allowsLineBreaks: false
         )
     ]
 
@@ -605,7 +631,8 @@ enum SyntaxHighlighter {
                     StringDelimiter(
                         value: "`",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: true
                     )
                 ]
             )
@@ -621,12 +648,14 @@ enum SyntaxHighlighter {
                     StringDelimiter(
                         value: "\"\"\"",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: true
                     ),
                     StringDelimiter(
                         value: "'''",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: true
                     )
                 ] + commonQuotedStrings
             )
@@ -638,12 +667,14 @@ enum SyntaxHighlighter {
                     StringDelimiter(
                         value: "\"\"\"",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: true
                     ),
                     StringDelimiter(
                         value: "\"",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: false
                     )
                 ]
             )
@@ -655,12 +686,14 @@ enum SyntaxHighlighter {
                     StringDelimiter(
                         value: "\"",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: false
                     ),
                     StringDelimiter(
                         value: "'",
                         allowsBackslashEscapes: false,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: false
                     )
                 ]
             )
@@ -672,12 +705,14 @@ enum SyntaxHighlighter {
                     StringDelimiter(
                         value: "\"",
                         allowsBackslashEscapes: true,
-                        allowsDoubledDelimiter: false
+                        allowsDoubledDelimiter: false,
+                        allowsLineBreaks: false
                     ),
                     StringDelimiter(
                         value: "'",
                         allowsBackslashEscapes: false,
-                        allowsDoubledDelimiter: true
+                        allowsDoubledDelimiter: true,
+                        allowsLineBreaks: false
                     )
                 ]
             )
@@ -695,12 +730,14 @@ enum SyntaxHighlighter {
                     StringDelimiter(
                         value: "'",
                         allowsBackslashEscapes: false,
-                        allowsDoubledDelimiter: true
+                        allowsDoubledDelimiter: true,
+                        allowsLineBreaks: false
                     ),
                     StringDelimiter(
                         value: "\"",
                         allowsBackslashEscapes: false,
-                        allowsDoubledDelimiter: true
+                        allowsDoubledDelimiter: true,
+                        allowsLineBreaks: false
                     )
                 ]
             )
