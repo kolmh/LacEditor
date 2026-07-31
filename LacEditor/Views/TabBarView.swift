@@ -19,7 +19,7 @@ struct TabBarView: View {
     @State private var canScrollTrailing = false
     @State private var isAddButtonHovering = false
     private let barHeight: CGFloat = 32
-    private let endDropZoneWidth: CGFloat = 18
+    private let minimumEndDropZoneWidth: CGFloat = 64
 
     var body: some View {
         HStack(spacing: 4) {
@@ -146,7 +146,12 @@ struct TabBarView: View {
                                     )
                                 }
                             )
-                            .frame(width: endDropZoneWidth, height: barHeight)
+                            .frame(
+                                width: endDropZoneWidth(
+                                    in: geometry.size.width
+                                ),
+                                height: barHeight
+                            )
                         }
                         .animation(
                             .smooth(duration: 0.2),
@@ -212,8 +217,17 @@ struct TabBarView: View {
 
     private func tabWidth(in availableWidth: CGFloat) -> CGFloat {
         let count = CGFloat(max(1, appState.documents.count))
-        let flexibleWidth = max(0, availableWidth - endDropZoneWidth) / count
+        let flexibleWidth = max(
+            0,
+            availableWidth - minimumEndDropZoneWidth
+        ) / count
         return min(220, max(132, flexibleWidth))
+    }
+
+    private func endDropZoneWidth(in availableWidth: CGFloat) -> CGFloat {
+        let tabsWidth = tabWidth(in: availableWidth)
+            * CGFloat(appState.documents.count)
+        return max(minimumEndDropZoneWidth, availableWidth - tabsWidth)
     }
 
     private func showsTrailingSeparator(after document: EditorDocument) -> Bool {
@@ -250,10 +264,10 @@ struct TabBarView: View {
     private func edgeFade(isLeading: Bool) -> some View {
         LinearGradient(
             colors: [
-                Color(nsColor: .windowBackgroundColor).opacity(0.98),
-                Color(nsColor: .windowBackgroundColor).opacity(0.8),
-                Color(nsColor: .windowBackgroundColor).opacity(0.32),
-                Color(nsColor: .windowBackgroundColor).opacity(0)
+                Color(nsColor: .lacEditorBackground).opacity(0.98),
+                Color(nsColor: .lacEditorBackground).opacity(0.8),
+                Color(nsColor: .lacEditorBackground).opacity(0.32),
+                Color(nsColor: .lacEditorBackground).opacity(0)
             ],
             startPoint: isLeading ? .leading : .trailing,
             endPoint: isLeading ? .trailing : .leading
@@ -636,7 +650,7 @@ private final class TabDragHandleView: NSView, NSDraggingSource {
         shadow.shadowOffset = NSSize(width: 0, height: -1)
         shadow.set()
 
-        NSColor.windowBackgroundColor.withAlphaComponent(0.98).setFill()
+        NSColor.lacEditorBackground.withAlphaComponent(0.98).setFill()
         NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
         NSGraphicsContext.current?.saveGraphicsState()
         NSShadow().set()

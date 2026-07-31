@@ -15,8 +15,6 @@ struct MainWindowView: View {
                     SidebarView()
                         .frame(width: 252)
                         .transition(.move(edge: .leading).combined(with: .opacity))
-
-                    Divider()
                 }
 
                 editorWorkspace
@@ -26,11 +24,6 @@ struct MainWindowView: View {
             if !appState.isSidebarVisible, appState.isSidebarPreviewVisible {
                 SidebarView()
                     .frame(width: 252)
-                    .overlay(alignment: .trailing) {
-                        Rectangle()
-                            .fill(Color(nsColor: .separatorColor))
-                            .frame(width: 1)
-                    }
                     .onHover(perform: appState.sidebarPreviewHoverChanged)
                     .transition(.move(edge: .leading).combined(with: .opacity))
                     .zIndex(2)
@@ -38,7 +31,7 @@ struct MainWindowView: View {
         }
         .animation(.easeOut(duration: 0.18), value: appState.isSidebarVisible)
         .navigationTitle(appState.windowTitle)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .lacEditorBackground))
         .toolbar {
             LacEditorToolbar()
         }

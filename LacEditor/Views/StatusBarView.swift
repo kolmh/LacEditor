@@ -29,7 +29,7 @@ struct StatusBarView: View {
         }
         .padding(.horizontal, 10)
         .frame(height: 25)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(Color(nsColor: .lacEditorBackground))
     }
 
     private func statusItem(_ text: String, icon: String? = nil, color: Color = .secondary) -> some View {

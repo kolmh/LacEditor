@@ -8,7 +8,7 @@ enum MarkdownRenderer {
         let border = darkMode ? "#3a3a40" : "#dedee3"
         let codeBackground = darkMode ? "#25252a" : "#f3f3f5"
         let accent = darkMode ? "#aeb6ff" : "#4d55a7"
-        let background = darkMode ? "#1e1e22" : "#fbfaf8"
+        let background = darkMode ? "#1e1e22" : "#fbfbfb"
 
         return """
         <!doctype html>

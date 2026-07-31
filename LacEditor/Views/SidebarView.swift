@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         VStack(spacing: 0) {
@@ -23,7 +24,25 @@ struct SidebarView: View {
             .padding(.horizontal, 14)
             .frame(height: 40)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background {
+            ZStack {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                Color(nsColor: .lacEditorBackground)
+                    .opacity(colorScheme == .dark ? 0.18 : 0.42)
+            }
+            .ignoresSafeArea()
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(
+                    Color(nsColor: .separatorColor)
+                        .opacity(colorScheme == .dark ? 0.58 : 0.46)
+                )
+                .frame(width: 1)
+                .ignoresSafeArea(.container, edges: .vertical)
+                .allowsHitTesting(false)
+        }
     }
 }
 
@@ -60,8 +79,6 @@ private struct RecentFilesView: View {
             }
             .padding(.horizontal, 14)
             .frame(height: 42)
-
-            Divider()
 
             if store.urls.isEmpty {
                 VStack(spacing: 10) {

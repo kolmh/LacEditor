@@ -311,8 +311,8 @@ struct WindowCloseCoordinator: NSViewRepresentable {
 @MainActor
 func configureEditorWindowChrome(_ window: NSWindow) {
     window.titleVisibility = .hidden
-    window.titlebarAppearsTransparent = false
-    window.backgroundColor = .windowBackgroundColor
+    window.titlebarAppearsTransparent = true
+    window.backgroundColor = .lacEditorBackground
     window.toolbarStyle = .unifiedCompact
     window.toolbar?.showsBaselineSeparator = false
 }

@@ -6,7 +6,12 @@ extension NSColor {
         if match == .darkAqua {
             return NSColor(calibratedWhite: 0.105, alpha: 1)
         }
-        return NSColor(red: 0.992, green: 0.988, blue: 0.975, alpha: 1)
+        return NSColor(
+            red: 251.0 / 255.0,
+            green: 251.0 / 255.0,
+            blue: 251.0 / 255.0,
+            alpha: 1
+        )
     }
 
     static let lacCurrentLineBackground = NSColor(name: nil) { appearance in
