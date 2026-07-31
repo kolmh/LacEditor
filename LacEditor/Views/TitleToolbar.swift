@@ -18,6 +18,21 @@ struct LacEditorToolbar: ToolbarContent {
             .onHover(perform: appState.sidebarPreviewHoverChanged)
         }
 
+        ToolbarItem(placement: .navigation) {
+            Text(appState.windowTitle)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: 320, alignment: .leading)
+                .padding(.leading, appState.isSidebarVisible ? 144 : 0)
+                .animation(
+                    .easeOut(duration: 0.18),
+                    value: appState.isSidebarVisible
+                )
+                .accessibilityAddTraits(.isHeader)
+        }
+
         ToolbarItemGroup(placement: .primaryAction) {
             if let document = appState.selectedDocument {
                 Button {

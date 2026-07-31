@@ -27,7 +27,7 @@ struct LacEditorApp: App {
                 windowID: primaryWindowID
             )
         }
-        .windowToolbarStyle(.unifiedCompact(showsTitle: true))
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .commands {
             LacEditorCommands(windowManager: windowManager)
         }

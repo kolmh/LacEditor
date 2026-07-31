@@ -148,6 +148,7 @@ struct EditorTextView: NSViewRepresentable {
         private var lastLayoutWidth: CGFloat = -1
         private var lastRulerWidth: CGFloat = -1
         private var highlightWorkItem: DispatchWorkItem?
+        private var rulerRefreshWorkItem: DispatchWorkItem?
         private var foldedRange: NSRange?
         private var observerTokens: [NSObjectProtocol] = []
         private let lineIndex: LogicalLineIndex
@@ -160,6 +161,7 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         deinit {
+            rulerRefreshWorkItem?.cancel()
             observerTokens.forEach(NotificationCenter.default.removeObserver)
         }
 
@@ -181,7 +183,6 @@ struct EditorTextView: NSViewRepresentable {
             ) { [weak self] _ in
                 guard let self else { return }
                 updateLayout(wordWrap: wordWrap)
-                ruler?.needsDisplay = true
             })
             observerTokens.append(NotificationCenter.default.addObserver(
                 forName: EditorCommandNotification.revealSelection,
@@ -278,6 +279,21 @@ struct EditorTextView: NSViewRepresentable {
             resetHorizontalScrollIfNeeded()
             textView.needsDisplay = true
             ensureVisibleLayout()
+            scheduleRulerRefreshAfterResize()
+        }
+
+        private func scheduleRulerRefreshAfterResize() {
+            rulerRefreshWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let ruler = self?.ruler else { return }
+                ruler.invalidateHashMarks()
+                ruler.setNeedsDisplay(ruler.bounds)
+            }
+            rulerRefreshWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + 0.12,
+                execute: workItem
+            )
         }
 
         private func resetHorizontalScrollIfNeeded() {
