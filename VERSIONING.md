@@ -119,6 +119,10 @@ chore(release): v0.2.0
 - 未保存确认、菜单和快捷键。
 - 更新日志中提到的用户场景。
 
+正式候选版本还必须执行 `./Scripts/run-acceptance.sh`，并按照
+`ACCEPTANCE_TESTS.md` 完成人工 UI 用例。验收结果保存到 `AcceptanceReports/`；P0 或 P1
+用例失败时不得创建版本标签。
+
 ## 紧急修复
 
 紧急修复从已发布标签创建分支，例如：

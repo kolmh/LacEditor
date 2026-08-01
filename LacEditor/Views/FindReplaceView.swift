@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+enum FindReplaceWindowIdentity {
+    static let identifier = NSUserInterfaceItemIdentifier(
+        "LacEditor.FindReplaceWindow"
+    )
+}
+
 struct FindReplaceView: View {
     @EnvironmentObject private var appState: AppState
     @ObservedObject private var state: FindReplaceState
@@ -119,28 +125,28 @@ struct FindReplaceView: View {
 }
 
 @MainActor
-final class FindReplacePanelController: NSWindowController, NSWindowDelegate {
+final class FindReplaceWindowController: NSWindowController, NSWindowDelegate {
     private weak var state: FindReplaceState?
     private var hasPositionedWindow = false
 
     init(appState: AppState) {
-        let panel = FindReplacePanel(
+        let findWindow = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 220),
-            styleMask: [.titled, .closable, .utilityWindow],
+            styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
         )
-        super.init(window: panel)
+        super.init(window: findWindow)
         state = appState.findReplace
 
-        panel.title = "查找与替换"
-        panel.isReleasedWhenClosed = false
-        panel.hidesOnDeactivate = true
-        panel.animationBehavior = .utilityWindow
-        panel.collectionBehavior.insert(.fullScreenAuxiliary)
-        panel.delegate = self
+        findWindow.identifier = FindReplaceWindowIdentity.identifier
+        findWindow.title = "查找与替换"
+        findWindow.isReleasedWhenClosed = false
+        findWindow.animationBehavior = .documentWindow
+        findWindow.collectionBehavior.insert(.fullScreenAuxiliary)
+        findWindow.delegate = self
 
-        panel.contentViewController = NSHostingController(
+        findWindow.contentViewController = NSHostingController(
             rootView: FindReplaceView(
                 state: appState.findReplace,
                 close: { [weak self] in
@@ -159,31 +165,20 @@ final class FindReplacePanelController: NSWindowController, NSWindowDelegate {
     }
 
     func present(mode: FindReplaceMode, relativeTo parentWindow: NSWindow) {
-        guard let panel = window else { return }
-        if panel.parent !== parentWindow {
-            panel.parent?.removeChildWindow(panel)
-            parentWindow.addChildWindow(panel, ordered: .above)
-        }
+        guard let findWindow = window else { return }
 
-        resize(for: mode, animated: panel.isVisible)
+        resize(for: mode, animated: findWindow.isVisible)
         if !hasPositionedWindow {
             position(over: parentWindow)
             hasPositionedWindow = true
         }
         showWindow(nil)
-        panel.makeKeyAndOrderFront(nil)
+        findWindow.makeKeyAndOrderFront(nil)
         state?.focusRequestID = UUID()
     }
 
     func dismiss() {
-        guard let panel = window else { return }
-        panel.parent?.removeChildWindow(panel)
-        panel.orderOut(nil)
-    }
-
-    func windowWillClose(_ notification: Notification) {
-        guard let panel = notification.object as? NSWindow else { return }
-        panel.parent?.removeChildWindow(panel)
+        window?.orderOut(nil)
     }
 
     private func resize(for mode: FindReplaceMode, animated: Bool) {
@@ -219,9 +214,4 @@ final class FindReplacePanelController: NSWindowController, NSWindowDelegate {
         }
         panel.setFrameOrigin(origin)
     }
-}
-
-private final class FindReplacePanel: NSPanel {
-    override var canBecomeKey: Bool { true }
-    override var canBecomeMain: Bool { false }
 }

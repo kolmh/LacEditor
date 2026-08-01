@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 private func require(_ condition: @autoclosure () -> Bool, _ message: String) {
@@ -23,6 +24,16 @@ do {
             "invalid JSON message"
         )
     }
+
+    let multilineInvalidJSON = "{\n  \"a\": 1,\n  \"b\":\n}"
+    do {
+        _ = try JSONFormatter.format(multilineInvalidJSON, pretty: true)
+        fatalError("Verification failed: multiline invalid JSON was accepted")
+    } catch {
+        let message = JSONFormatter.userFacingError(error, in: multilineInvalidJSON)
+        require(message.contains("第 4 行"), "invalid JSON line number")
+        require(message.contains("第 1 列"), "invalid JSON column number")
+    }
 } catch {
     fatalError("Verification failed: JSON formatter threw \(error)")
 }
@@ -41,6 +52,51 @@ require(html.contains("<h1>标题</h1>"), "Markdown heading")
 require(html.contains("<blockquote>引用</blockquote>"), "Markdown quote")
 require(html.contains("<table>"), "Markdown table")
 require(html.contains("<strong>轻量</strong>"), "Markdown emphasis")
+
+let inlineCodeHTML = MarkdownRenderer.render(
+    #"`**保持原样** [链接](https://example.com)`"#,
+    darkMode: false
+)
+require(
+    inlineCodeHTML.contains(
+        #"<code>**保持原样** [链接](https://example.com)</code>"#
+    ),
+    "Markdown inline code protects nested markup"
+)
+require(
+    !inlineCodeHTML.contains("<code><strong>"),
+    "Markdown inline code is not emphasized"
+)
+let inlineCodeCollisionHTML = MarkdownRenderer.render(
+    "LACXINCODEX0XENDLAC and `code`",
+    darkMode: false
+)
+require(
+    inlineCodeCollisionHTML.contains("LACXINCODEX0XENDLAC and <code>code</code>"),
+    "Markdown inline code placeholder cannot collide with source text"
+)
+let underscoredLinkHTML = MarkdownRenderer.render(
+    "[链接](https://example.com/foo_bar_baz)",
+    darkMode: false
+)
+require(
+    underscoredLinkHTML.contains(
+        #"<a href="https://example.com/foo_bar_baz">链接</a>"#
+    ),
+    "Markdown emphasis does not alter link destinations"
+)
+require(
+    !underscoredLinkHTML.contains("<em>"),
+    "Markdown link destination underscores stay literal"
+)
+let crlfMarkdownHTML = MarkdownRenderer.render(
+    "第一行\r\n第二行",
+    darkMode: false
+)
+require(
+    crlfMarkdownHTML.contains("<p>第一行 第二行</p>"),
+    "Markdown treats CRLF as one line separator"
+)
 
 let orderedMarkdown = """
 1. 第一项
@@ -373,7 +429,8 @@ require(initialPosition.column == 1, "logical line index initial column")
 
 lineIndex.applyEdit(
     range: NSRange(location: secondLineStart, length: 0),
-    replacement: "新增行\n"
+    replacement: "新增行\n",
+    in: lineIndexSource as NSString
 )
 let insertedLineSource = "第一行\n新增行\n第二行"
 let insertedPosition = lineIndex.position(
@@ -387,7 +444,11 @@ require(
 )
 
 let insertedLineRange = (insertedLineSource as NSString).range(of: "新增行\n")
-lineIndex.applyEdit(range: insertedLineRange, replacement: "")
+lineIndex.applyEdit(
+    range: insertedLineRange,
+    replacement: "",
+    in: insertedLineSource as NSString
+)
 let deletedPosition = lineIndex.position(
     at: secondLineStart,
     in: lineIndexSource as NSString
@@ -414,6 +475,82 @@ require(
     "logical line index reports character-based Unicode columns"
 )
 
+for separator in ["\r", "\r\n", "\u{2028}", "\u{2029}"] {
+    let source = "第一行\(separator)第二行"
+    let index = LogicalLineIndex(text: source)
+    let secondLineLocation = ("第一行\(separator)" as NSString).length
+    let position = index.position(
+        at: secondLineLocation,
+        in: source as NSString
+    )
+    require(position.line == 2, "logical line index handles \(separator.debugDescription)")
+    require(position.column == 1, "logical line column handles \(separator.debugDescription)")
+}
+
+let crlfSource = "第一行\r\n第二行"
+let crlfIndex = LogicalLineIndex(text: crlfSource)
+let lfLocation = ("第一行\r" as NSString).length
+crlfIndex.applyEdit(
+    range: NSRange(location: lfLocation, length: 1),
+    replacement: "",
+    in: crlfSource as NSString
+)
+let crSource = "第一行\r第二行"
+require(
+    crlfIndex.position(
+        at: ("第一行\r" as NSString).length,
+        in: crSource as NSString
+    ).line == 2,
+    "logical line index rescans a changed CRLF boundary"
+)
+
+let legacyDocument = EditorDocument(text: "一\r二\r\n三\u{2028}四\u{2029}五")
+require(legacyDocument.lineCount == 5, "document counts all supported line separators")
+
+let renamedDocument = EditorDocument(
+    url: URL(fileURLWithPath: "/tmp/example.txt"),
+    language: .plainText
+)
+var renamedDocumentSnapshots: [String] = []
+let renamedDocumentObservation = renamedDocument.objectWillChange.sink {
+    renamedDocumentSnapshots.append(renamedDocument.displayName)
+}
+renamedDocument.updateLocationAfterRename(
+    from: URL(fileURLWithPath: "/tmp/other.txt"),
+    to: URL(fileURLWithPath: "/tmp/example.md")
+)
+require(
+    renamedDocument.url?.lastPathComponent == "example.txt",
+    "rename ignores unrelated document"
+)
+renamedDocument.updateLocationAfterRename(
+    from: URL(fileURLWithPath: "/tmp/example.txt"),
+    to: URL(fileURLWithPath: "/tmp/example.md")
+)
+require(renamedDocument.url?.lastPathComponent == "example.md", "rename updates URL")
+require(renamedDocument.language == .markdown, "rename updates inferred language")
+require(renamedDocument.isPreviewVisible, "rename enables Markdown preview")
+require(
+    renamedDocumentSnapshots.last == "example.md",
+    "rename publishes one consistent post-update title"
+)
+renamedDocument.updateLocationAfterRename(
+    from: URL(fileURLWithPath: "/tmp/example.md"),
+    to: URL(fileURLWithPath: "/tmp/example.js")
+)
+require(renamedDocument.language == .javascript, "second rename updates language")
+require(!renamedDocument.isPreviewVisible, "rename hides preview outside Markdown")
+
+let savedAsDocument = EditorDocument()
+savedAsDocument.updateLocation(to: URL(fileURLWithPath: "/tmp/saved-as.md"))
+require(savedAsDocument.language == .markdown, "save as updates inferred language")
+require(savedAsDocument.isPreviewVisible, "save as enables Markdown preview")
+savedAsDocument.isPreviewVisible = false
+savedAsDocument.updateLocation(to: URL(fileURLWithPath: "/tmp/saved-again.md"))
+require(!savedAsDocument.isPreviewVisible, "save as Markdown preserves preview choice")
+savedAsDocument.updateLocation(to: URL(fileURLWithPath: "/tmp/saved-as.txt"))
+require(!savedAsDocument.isPreviewVisible, "save as hides preview outside Markdown")
+
 let headingSource = "# 一级\n正文\n## 二级\n内容\n# 下一个\n"
 let headingRange = FoldService.foldableRange(in: headingSource, at: 0, language: .markdown)
 require(headingRange == NSRange(location: 5, length: 12), "Markdown fold range")
@@ -424,6 +561,22 @@ if let jsonRange = FoldService.foldableRange(in: jsonSource, at: cursor, languag
     require((jsonSource as NSString).substring(with: jsonRange) == #""wrap":true"#, "JSON fold range")
 } else {
     fatalError("Verification failed: missing JSON fold range")
+}
+
+let siblingJSONSource = #"{"closed":{"value":1},"active":{"value":2}}"#
+let activeCursor = (siblingJSONSource as NSString).range(of: #""active""#).location
+if let activeRange = FoldService.foldableRange(
+    in: siblingJSONSource,
+    at: activeCursor,
+    language: .json
+) {
+    require(
+        (siblingJSONSource as NSString).substring(with: activeRange)
+            == #""closed":{"value":1},"active":{"value":2}"#,
+        "JSON fold ignores an already closed sibling container"
+    )
+} else {
+    fatalError("Verification failed: missing JSON sibling fold range")
 }
 
 print("Core verification passed")

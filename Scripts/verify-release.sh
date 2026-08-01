@@ -52,7 +52,15 @@ swiftc \
     -o .build/core-verification
 .build/core-verification
 
+swiftc \
+    LacEditor/Editor/FoldLayoutManager.swift \
+    LacEditor/Editor/LogicalLineIndex.swift \
+    Verification/FoldLayoutVerification.swift \
+    -o .build/fold-layout-verification
+.build/fold-layout-verification
+
 xcodebuild \
+    -quiet \
     -project LacEditor.xcodeproj \
     -scheme LacEditor \
     -configuration Release \

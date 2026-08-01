@@ -21,7 +21,7 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.drawsBackground = false
 
         let textStorage = NSTextStorage()
-        let layoutManager = NSLayoutManager()
+        let layoutManager = FoldLayoutManager()
         textStorage.addLayoutManager(layoutManager)
         let initialSize = scrollView.contentSize
         let textContainer = NSTextContainer(
@@ -51,6 +51,15 @@ struct EditorTextView: NSViewRepresentable {
         textView.backgroundColor = NSColor.lacEditorBackground
         textView.drawsBackground = true
         textView.string = document.text
+        let textLength = (document.text as NSString).length
+        let selectionLocation = min(document.selectionRange.location, textLength)
+        textView.setSelectedRange(NSRange(
+            location: selectionLocation,
+            length: min(
+                document.selectionRange.length,
+                textLength - selectionLocation
+            )
+        ))
         textView.font = editorFont(size: fontSize)
         textView.minSize = NSSize.zero
         textView.maxSize = NSSize(
@@ -69,6 +78,7 @@ struct EditorTextView: NSViewRepresentable {
         scrollView.contentView.postsBoundsChangedNotifications = true
         scrollView.contentView.postsFrameChangedNotifications = true
         context.coordinator.textView = textView
+        context.coordinator.foldLayoutManager = layoutManager
         context.coordinator.ruler = ruler
         ruler.lineNumberProvider = { [weak coordinator = context.coordinator] location in
             coordinator?.lineNumber(at: location) ?? 1
@@ -80,6 +90,7 @@ struct EditorTextView: NSViewRepresentable {
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
         context.coordinator.updateLayout(wordWrap: wordWrap, force: true)
         context.coordinator.updateActivity(isActive)
+        context.coordinator.synchronizeSelectionState()
         context.coordinator.scheduleHighlight(delay: 0)
         return scrollView
     }
@@ -103,6 +114,7 @@ struct EditorTextView: NSViewRepresentable {
             != document.textRevision
         if documentChanged || revisionChanged {
             context.coordinator.isApplyingExternalUpdate = true
+            context.coordinator.clearFold()
             textView.string = document.text
             context.coordinator.resetLineIndex(with: document.text)
             let textLength = (document.text as NSString).length
@@ -137,8 +149,10 @@ struct EditorTextView: NSViewRepresentable {
         weak var textView: LacTextView?
         weak var ruler: LineNumberRulerView?
         weak var scrollView: NSScrollView?
+        weak var foldLayoutManager: FoldLayoutManager?
         var isApplyingExternalUpdate = false
         private var isApplyingAutomatedEdit = false
+        private var isRestoringOffscreenEdit = false
         var currentFontSize: CGFloat = 14
         var currentLanguage: EditorLanguage
         var lastSynchronizedRevision: UInt
@@ -149,7 +163,10 @@ struct EditorTextView: NSViewRepresentable {
         private var lastRulerWidth: CGFloat = -1
         private var highlightWorkItem: DispatchWorkItem?
         private var rulerRefreshWorkItem: DispatchWorkItem?
-        private var foldedRange: NSRange?
+        private var selectionVisibilityWorkItem: DispatchWorkItem?
+        private var pendingSelectionScrollOriginY: CGFloat?
+        private var pendingOffscreenEditAnchor: Int?
+        private var pendingOffscreenSelectionRange: NSRange?
         private var observerTokens: [NSObjectProtocol] = []
         private let lineIndex: LogicalLineIndex
 
@@ -162,6 +179,7 @@ struct EditorTextView: NSViewRepresentable {
 
         deinit {
             rulerRefreshWorkItem?.cancel()
+            selectionVisibilityWorkItem?.cancel()
             observerTokens.forEach(NotificationCenter.default.removeObserver)
         }
 
@@ -172,9 +190,10 @@ struct EditorTextView: NSViewRepresentable {
                 object: scrollView.contentView,
                 queue: .main
             ) { [weak self] _ in
-                self?.resetHorizontalScrollIfNeeded()
-                self?.ruler?.needsDisplay = true
-                self?.scheduleHighlight()
+                guard let self else { return }
+                resetHorizontalScrollIfNeeded()
+                refreshRulerForViewportChange()
+                scheduleHighlight()
             })
             observerTokens.append(NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification,
@@ -193,6 +212,7 @@ struct EditorTextView: NSViewRepresentable {
                       let request = notification.object as? EditorSelectionRequest,
                       request.documentID == document.id,
                       let textView else { return }
+                clearFoldIfNeeded(toReveal: request.range)
                 let length = (textView.string as NSString).length
                 let range = NSIntersectionRange(
                     request.range,
@@ -229,6 +249,43 @@ struct EditorTextView: NSViewRepresentable {
                       notification.object as? UUID == document.id else { return }
                 textView?.undoManager?.redo()
             })
+            observerTokens.append(NotificationCenter.default.addObserver(
+                forName: EditorCommandNotification.applyTextUpdate,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let request = notification.object as? EditorTextUpdateRequest,
+                      request.documentID == document.id,
+                      let textView else { return }
+                apply(request, to: textView)
+            })
+        }
+
+        private func apply(
+            _ request: EditorTextUpdateRequest,
+            to textView: LacTextView
+        ) {
+            let fullRange = NSRange(
+                location: 0,
+                length: (textView.string as NSString).length
+            )
+            isApplyingAutomatedEdit = true
+            defer { isApplyingAutomatedEdit = false }
+            guard textView.shouldChangeText(
+                in: fullRange,
+                replacementString: request.text
+            ) else { return }
+
+            request.wasHandled = true
+            textView.textStorage?.replaceCharacters(
+                in: fullRange,
+                with: request.text
+            )
+            textView.didChangeText()
+            textView.setSelectedRange(request.selectionRange)
+            textView.scrollRangeToVisible(request.selectionRange)
+            textView.undoManager?.setActionName(request.actionName)
         }
 
         func updateLayout(wordWrap: Bool, force: Bool = false) {
@@ -332,26 +389,141 @@ struct EditorTextView: NSViewRepresentable {
             if lineIndex.textLength != (textView.string as NSString).length {
                 lineIndex.reset(with: textView.string)
             }
+            restorePendingOffscreenEdit(in: textView)
             document.text = textView.string
             lastSynchronizedRevision = document.textRevision
             document.refreshDirtyState()
             document.statusMessage = nil
-            if let existing = foldedRange,
-               let layoutManager = textView.layoutManager {
-                let glyphRange = layoutManager.glyphRange(
-                    forCharacterRange: existing,
-                    actualCharacterRange: nil
-                )
-                if glyphRange.length > 0 {
-                    for glyph in glyphRange.location..<NSMaxRange(glyphRange) {
-                        layoutManager.setNotShownAttribute(false, forGlyphAt: glyph)
-                    }
-                }
-            }
-            foldedRange = nil
+            clearFold()
             refreshRuler()
             updateCursor()
+            scheduleSelectionVisibilitySync()
             scheduleHighlight()
+        }
+
+        private func scheduleSelectionVisibilitySync() {
+            selectionVisibilityWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self, let textView else { return }
+                let selection = textView.selectedRange()
+                let text = textView.string as NSString
+                if text.length > 0, let layoutManager = textView.layoutManager {
+                    let anchor = min(selection.location, text.length - 1)
+                    let lineRange = text.lineRange(
+                        for: NSRange(location: anchor, length: 0)
+                    )
+                    layoutManager.invalidateLayout(
+                        forCharacterRange: lineRange,
+                        actualCharacterRange: nil
+                    )
+                    layoutManager.ensureLayout(forCharacterRange: lineRange)
+                }
+                textView.scrollRangeToVisible(selection)
+                updateCursor()
+                refreshRuler()
+            }
+            selectionVisibilityWorkItem = workItem
+            DispatchQueue.main.async(execute: workItem)
+        }
+
+        private func captureOffscreenSelectionPosition(
+            in textView: NSTextView,
+            affectedRange: NSRange,
+            replacement: String
+        ) {
+            let expectedSelection = NSRange(
+                location: affectedRange.location + (replacement as NSString).length,
+                length: 0
+            )
+            if let pendingAnchor = pendingOffscreenEditAnchor {
+                if pendingAnchor == affectedRange.location {
+                    pendingOffscreenSelectionRange = expectedSelection
+                    return
+                }
+                pendingSelectionScrollOriginY = nil
+                pendingOffscreenEditAnchor = nil
+                pendingOffscreenSelectionRange = nil
+            }
+
+            guard let layoutManager = textView.layoutManager else { return }
+            let text = textView.string as NSString
+            // IME commits can temporarily move selectedRange to the document end.
+            // The delegate's affected range remains the authoritative edit anchor.
+            let location = min(affectedRange.location, text.length)
+            if location == 0, textView.visibleRect.minY > 0.5 {
+                pendingSelectionScrollOriginY = 0
+                pendingOffscreenEditAnchor = affectedRange.location
+                pendingOffscreenSelectionRange = expectedSelection
+                return
+            }
+            let lineRect: NSRect
+            if location == text.length,
+               !layoutManager.extraLineFragmentRect.isEmpty {
+                lineRect = layoutManager.extraLineFragmentRect
+            } else if text.length > 0 {
+                let anchor = min(location, text.length - 1)
+                let lineRange = text.lineRange(
+                    for: NSRange(location: anchor, length: 0)
+                )
+                let glyphRange = layoutManager.glyphRange(
+                    forCharacterRange: lineRange,
+                    actualCharacterRange: nil
+                )
+                guard glyphRange.length > 0 else { return }
+                lineRect = layoutManager.lineFragmentRect(
+                    forGlyphAt: glyphRange.location,
+                    effectiveRange: nil
+                )
+            } else {
+                lineRect = NSRect(
+                    x: 0,
+                    y: 0,
+                    width: 1,
+                    height: textView.font?.pointSize ?? 14
+                )
+            }
+
+            var textViewRect = lineRect
+            textViewRect.origin.y += textView.textContainerOrigin.y
+            let visibleRect = textView.visibleRect
+            guard textViewRect.maxY < visibleRect.minY
+                    || textViewRect.minY > visibleRect.maxY else { return }
+            pendingSelectionScrollOriginY = max(
+                0,
+                textViewRect.minY - textView.textContainerInset.height
+            )
+            pendingOffscreenEditAnchor = affectedRange.location
+            pendingOffscreenSelectionRange = expectedSelection
+        }
+
+        private func restorePendingOffscreenEdit(in textView: NSTextView) {
+            guard !textView.hasMarkedText(),
+                  let expectedSelection = pendingOffscreenSelectionRange else {
+                return
+            }
+
+            let textLength = (textView.string as NSString).length
+            let location = min(expectedSelection.location, textLength)
+            let selection = NSRange(
+                location: location,
+                length: min(
+                    expectedSelection.length,
+                    textLength - location
+                )
+            )
+            isRestoringOffscreenEdit = true
+            textView.setSelectedRange(selection)
+            if let targetY = pendingSelectionScrollOriginY, let scrollView {
+                scrollView.contentView.scroll(to: NSPoint(
+                    x: scrollView.contentView.bounds.origin.x,
+                    y: max(0, targetY)
+                ))
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
+            isRestoringOffscreenEdit = false
+            pendingSelectionScrollOriginY = nil
+            pendingOffscreenEditAnchor = nil
+            pendingOffscreenSelectionRange = nil
         }
 
         func textView(
@@ -359,6 +531,7 @@ struct EditorTextView: NSViewRepresentable {
             shouldChangeTextIn affectedCharRange: NSRange,
             replacementString: String?
         ) -> Bool {
+            clearFold()
             let replacement = replacementString ?? ""
             let nsText = textView.string as NSString
             let safeLocation = min(affectedCharRange.location, nsText.length)
@@ -370,12 +543,28 @@ struct EditorTextView: NSViewRepresentable {
                 )
             )
 
+            if !isApplyingAutomatedEdit {
+                captureOffscreenSelectionPosition(
+                    in: textView,
+                    affectedRange: safeRange,
+                    replacement: replacement
+                )
+            }
+
             if isApplyingAutomatedEdit {
-                lineIndex.applyEdit(range: safeRange, replacement: replacement)
+                lineIndex.applyEdit(
+                    range: safeRange,
+                    replacement: replacement,
+                    in: nsText
+                )
                 return true
             }
             guard document.language == .markdown else {
-                lineIndex.applyEdit(range: safeRange, replacement: replacement)
+                lineIndex.applyEdit(
+                    range: safeRange,
+                    replacement: replacement,
+                    in: nsText
+                )
                 return true
             }
 
@@ -389,7 +578,11 @@ struct EditorTextView: NSViewRepresentable {
                     range: safeRange,
                     replacement: replacement
                   ) else {
-                lineIndex.applyEdit(range: safeRange, replacement: replacement)
+                lineIndex.applyEdit(
+                    range: safeRange,
+                    replacement: replacement,
+                    in: nsText
+                )
                 return true
             }
 
@@ -404,7 +597,11 @@ struct EditorTextView: NSViewRepresentable {
                 from: textView.string,
                 to: normalization.text
             ) else {
-                lineIndex.applyEdit(range: safeRange, replacement: replacement)
+                lineIndex.applyEdit(
+                    range: safeRange,
+                    replacement: replacement,
+                    in: nsText
+                )
                 return true
             }
 
@@ -422,9 +619,16 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard textView?.hasMarkedText() != true else { return }
+            guard !isRestoringOffscreenEdit,
+                  textView?.hasMarkedText() != true else { return }
             updateCursor()
             textView?.needsDisplay = true
+        }
+
+        func synchronizeSelectionState() {
+            DispatchQueue.main.async { [weak self] in
+                self?.updateCursor()
+            }
         }
 
         func scheduleHighlight(delay: TimeInterval = 0.12) {
@@ -439,7 +643,8 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         func applyHighlight(fontSize: CGFloat) {
-            guard let textView,
+            guard currentLanguage != .plainText,
+                  let textView,
                   !textView.hasMarkedText(),
                   let storage = textView.textStorage else { return }
             let selection = textView.selectedRange()
@@ -504,15 +709,27 @@ struct EditorTextView: NSViewRepresentable {
         private func refreshRuler() {
             guard textView != nil else { return }
             ensureVisibleLayout()
-            ruler?.invalidateHashMarks()
-            ruler?.needsDisplay = true
+            invalidateEntireRuler()
 
             // NSTextView finishes creating the extra line fragment after the
             // change notification. Refresh once more on the next run loop.
             DispatchQueue.main.async { [weak self] in
-                self?.ruler?.invalidateHashMarks()
-                self?.ruler?.needsDisplay = true
+                self?.invalidateEntireRuler()
             }
+        }
+
+        private func refreshRulerForViewportChange() {
+            invalidateEntireRuler()
+            DispatchQueue.main.async { [weak self] in
+                self?.invalidateEntireRuler()
+            }
+        }
+
+        private func invalidateEntireRuler() {
+            guard let ruler else { return }
+            ruler.invalidateHashMarks()
+            ruler.needsDisplay = true
+            ruler.setNeedsDisplay(ruler.bounds)
         }
 
         func resetLineIndex(with text: String) {
@@ -566,25 +783,39 @@ struct EditorTextView: NSViewRepresentable {
 
         private func toggleFold() {
             guard let textView, textView.window?.firstResponder === textView,
-                  let layoutManager = textView.layoutManager else { return }
-            if let existing = foldedRange {
-                let glyphRange = layoutManager.glyphRange(forCharacterRange: existing, actualCharacterRange: nil)
-                for glyph in glyphRange.location..<NSMaxRange(glyphRange) {
-                    layoutManager.setNotShownAttribute(false, forGlyphAt: glyph)
-                }
-                foldedRange = nil
+                  let foldLayoutManager else { return }
+            if foldLayoutManager.foldedRange != nil {
+                clearFold()
             } else if let range = FoldService.foldableRange(
                 in: textView.string,
                 at: textView.selectedRange().location,
                 language: document.language
             ) {
-                let glyphRange = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
-                for glyph in glyphRange.location..<NSMaxRange(glyphRange) {
-                    layoutManager.setNotShownAttribute(true, forGlyphAt: glyph)
-                }
-                foldedRange = range
+                foldLayoutManager.setFoldedRange(range)
             }
+            refreshFoldLayout()
+        }
+
+        func clearFold() {
+            guard foldLayoutManager?.foldedRange != nil else { return }
+            foldLayoutManager?.setFoldedRange(nil)
+            refreshFoldLayout()
+        }
+
+        private func clearFoldIfNeeded(toReveal range: NSRange) {
+            guard let foldedRange = foldLayoutManager?.foldedRange,
+                  NSIntersectionRange(foldedRange, range).length > 0 else { return }
+            clearFold()
+        }
+
+        private func refreshFoldLayout() {
+            guard let textView else { return }
+            if let textContainer = textView.textContainer {
+                foldLayoutManager?.ensureLayout(for: textContainer)
+            }
+            textView.needsLayout = true
             textView.needsDisplay = true
+            ruler?.invalidateHashMarks()
             ruler?.needsDisplay = true
         }
     }

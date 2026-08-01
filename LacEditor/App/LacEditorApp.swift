@@ -20,7 +20,7 @@ struct LacEditorApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        Window("LacEditor", id: "main") {
             EditorWindowRoot(
                 appState: appState,
                 windowManager: windowManager,
@@ -28,6 +28,7 @@ struct LacEditorApp: App {
             )
         }
         .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        .defaultSize(width: 1120, height: 720)
         .commands {
             LacEditorCommands(windowManager: windowManager)
         }
@@ -263,6 +264,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
             window.title = appState.windowTitle
             configureEditorWindowChrome(window)
             windowManager.register(windowID: windowID, state: appState, window: window)
+            context.coordinator.scheduleChromeUpdate(for: window)
         }
         return view
     }
@@ -271,6 +273,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
         nsView.window?.title = appState.windowTitle
         if let window = nsView.window {
             configureEditorWindowChrome(window)
+            context.coordinator.scheduleChromeUpdate(for: window)
         }
         if let window = nsView.window, appState.hostWindow !== window {
             windowManager.register(windowID: windowID, state: appState, window: window)
@@ -282,11 +285,31 @@ struct WindowCloseCoordinator: NSViewRepresentable {
         let windowManager: WindowManager
         let windowID: UUID
         weak var previousDelegate: NSWindowDelegate?
+        private var chromeWorkItem: DispatchWorkItem?
 
         init(appState: AppState, windowManager: WindowManager, windowID: UUID) {
             self.appState = appState
             self.windowManager = windowManager
             self.windowID = windowID
+        }
+
+        deinit {
+            chromeWorkItem?.cancel()
+        }
+
+        func scheduleChromeUpdate(for window: NSWindow) {
+            chromeWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak window] in
+                MainActor.assumeIsolated {
+                    guard let window else { return }
+                    configureEditorWindowChrome(window)
+                }
+            }
+            chromeWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + 0.2,
+                execute: workItem
+            )
         }
 
         func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -310,9 +333,10 @@ struct WindowCloseCoordinator: NSViewRepresentable {
 
 @MainActor
 func configureEditorWindowChrome(_ window: NSWindow) {
+    window.styleMask.insert(.fullSizeContentView)
+    window.toolbarStyle = .unifiedCompact
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.backgroundColor = .lacEditorBackground
-    window.toolbarStyle = .unifiedCompact
     window.toolbar?.showsBaselineSeparator = false
 }

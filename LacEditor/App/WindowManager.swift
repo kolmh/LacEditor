@@ -33,6 +33,7 @@ final class WindowManager: ObservableObject {
     private var isConfirmingRecentFilesClear = false
     private var activeStateCancellable: AnyCancellable?
     private var recentFilesCancellable: AnyCancellable?
+    private let fileService = FileService()
     private lazy var appearanceMenuController = AppearanceMenuController(
         windowManager: self
     )
@@ -107,6 +108,10 @@ final class WindowManager: ObservableObject {
         windowControllers[windowID] = controller
         controller.showWindow(nil)
         window.makeKeyAndOrderFront(nil)
+        DispatchQueue.main.async { [weak window] in
+            guard let window else { return }
+            configureEditorWindowChrome(window)
+        }
         return state
     }
 
@@ -144,6 +149,35 @@ final class WindowManager: ObservableObject {
             if response == .alertFirstButtonReturn {
                 recentFiles.clear()
             }
+        }
+    }
+
+    func requestRenameFile(_ url: URL) {
+        let alert = NSAlert()
+        alert.messageText = "重命名文件"
+        alert.informativeText = "请输入新的文件名。"
+        alert.addButton(withTitle: "重命名")
+        alert.addButton(withTitle: "取消")
+
+        let nameField = NSTextField(
+            frame: NSRect(x: 0, y: 0, width: 320, height: 24)
+        )
+        nameField.stringValue = url.lastPathComponent
+        nameField.selectText(nil)
+        alert.accessoryView = nameField
+
+        let rename: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else { return }
+            let newName = nameField.stringValue.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            )
+            self?.renameFile(url, to: newName)
+        }
+
+        if let window = activeState?.hostWindow {
+            alert.beginSheetModal(for: window, completionHandler: rename)
+        } else {
+            rename(alert.runModal())
         }
     }
 
@@ -241,6 +275,24 @@ final class WindowManager: ObservableObject {
     func cancelTabDrag() {
         activeTabDrag = nil
         draggedDocumentID = nil
+    }
+
+    private func renameFile(_ url: URL, to newName: String) {
+        do {
+            let newURL = try fileService.rename(url, to: newName)
+            for state in states.values {
+                state.updateRenamedFileReference(from: url, to: newURL)
+            }
+            recentFiles.replace(url, with: newURL)
+        } catch {
+            let alert = NSAlert(error: error)
+            alert.messageText = "无法重命名文件"
+            if let window = activeState?.hostWindow {
+                alert.beginSheetModal(for: window)
+            } else {
+                alert.runModal()
+            }
+        }
     }
 
     func detach(

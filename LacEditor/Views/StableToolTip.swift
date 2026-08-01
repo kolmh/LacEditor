@@ -19,6 +19,17 @@ private struct StableToolTipBridge: NSViewRepresentable {
     func updateNSView(_ nsView: ToolTipTrackingView, context: Context) {
         nsView.update(text: text, shortcut: shortcut)
     }
+
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: ToolTipTrackingView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height else {
+            return nil
+        }
+        return CGSize(width: width, height: height)
+    }
 }
 
 private final class ToolTipTrackingView: NSView {
@@ -31,6 +42,7 @@ private final class ToolTipTrackingView: NSView {
         self.text = text
         self.shortcut = shortcut
         super.init(frame: .zero)
+        toolTip = displayText
     }
 
     required init?(coder: NSCoder) {
@@ -76,7 +88,12 @@ private final class ToolTipTrackingView: NSView {
         guard self.text != text || self.shortcut != shortcut else { return }
         self.text = text
         self.shortcut = shortcut
+        toolTip = displayText
         cancelAndClose()
+    }
+
+    private var displayText: String {
+        shortcut.map { "\(text)    \($0)" } ?? text
     }
 
     private func schedulePanel() {

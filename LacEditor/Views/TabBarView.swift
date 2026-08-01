@@ -791,6 +791,17 @@ private struct HorizontalWheelScrollBridge: NSViewRepresentable {
         nsView.refreshMetrics()
     }
 
+    func sizeThatFits(
+        _ proposal: ProposedViewSize,
+        nsView: HorizontalWheelMonitorView,
+        context: Context
+    ) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height else {
+            return nil
+        }
+        return CGSize(width: width, height: height)
+    }
+
     private func configure(_ view: HorizontalWheelMonitorView) {
         view.onMetricsChanged = { leading, trailing in
             if canScrollLeading != leading {

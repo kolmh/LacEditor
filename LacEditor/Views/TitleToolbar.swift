@@ -71,6 +71,11 @@ struct LacEditorToolbar: ToolbarContent {
                     } label: {
                         Image(systemName: document.isPreviewVisible ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
                     }
+                    .accessibilityLabel(
+                        document.isPreviewVisible
+                            ? "隐藏 Markdown 预览"
+                            : "显示 Markdown 预览"
+                    )
                     .stableHelp(
                         document.isPreviewVisible ? "隐藏 Markdown 预览" : "显示 Markdown 预览",
                         shortcut: "⌥⌘P"

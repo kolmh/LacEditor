@@ -38,26 +38,49 @@ enum FoldService {
     private static func jsonRange(in text: String, at cursor: Int) -> NSRange? {
         let characters = Array(text.utf16)
         guard !characters.isEmpty else { return nil }
-        var openingIndex: Int?
-        var opening: UInt16 = 0
-        var index = min(cursor, characters.count - 1)
-
-        while index >= 0 {
-            let value = characters[index]
-            if value == 123 || value == 91 {
-                openingIndex = index
-                opening = value
-                break
-            }
-            if index == 0 { break }
-            index -= 1
-        }
-        guard let start = openingIndex else { return nil }
-        let closing: UInt16 = opening == 123 ? 125 : 93
-        var depth = 0
+        let safeCursor = min(max(cursor, 0), characters.count - 1)
+        var stack: [(index: Int, delimiter: UInt16)] = []
         var isInString = false
         var isEscaped = false
 
+        func consume(_ value: UInt16, at position: Int) {
+            let value = characters[position]
+            if isInString {
+                if isEscaped {
+                    isEscaped = false
+                } else if value == 92 {
+                    isEscaped = true
+                } else if value == 34 {
+                    isInString = false
+                }
+            } else if value == 34 {
+                isInString = true
+            } else if value == 123 || value == 91 {
+                stack.append((position, value))
+            } else if value == 125 || value == 93,
+                      let last = stack.last {
+                let matches = (last.delimiter == 123 && value == 125)
+                    || (last.delimiter == 91 && value == 93)
+                if matches {
+                    stack.removeLast()
+                }
+            }
+        }
+
+        if safeCursor > 0 {
+            for position in 0..<safeCursor {
+                consume(characters[position], at: position)
+            }
+        }
+        if characters[safeCursor] == 123 || characters[safeCursor] == 91 {
+            consume(characters[safeCursor], at: safeCursor)
+        }
+
+        guard let container = stack.last else { return nil }
+        let start = container.index
+        var scanStack: [UInt16] = []
+        isInString = false
+        isEscaped = false
         for position in start..<characters.count {
             let value = characters[position]
             if isInString {
@@ -68,16 +91,21 @@ enum FoldService {
                 } else if value == 34 {
                     isInString = false
                 }
-                continue
-            }
-            if value == 34 {
+            } else if value == 34 {
                 isInString = true
-            } else if value == opening {
-                depth += 1
-            } else if value == closing {
-                depth -= 1
-                if depth == 0, position > start + 1 {
-                    return NSRange(location: start + 1, length: position - start - 1)
+            } else if value == 123 || value == 91 {
+                scanStack.append(value)
+            } else if value == 125 || value == 93,
+                      let opening = scanStack.last {
+                let matches = (opening == 123 && value == 125)
+                    || (opening == 91 && value == 93)
+                guard matches else { return nil }
+                scanStack.removeLast()
+                if scanStack.isEmpty, position > start + 1 {
+                    return NSRange(
+                        location: start + 1,
+                        length: position - start - 1
+                    )
                 }
             }
         }

@@ -65,9 +65,27 @@ final class EditorDocument: ObservableObject, Identifiable {
     }
 
     var lineCount: Int {
-        max(1, text.reduce(into: 1) { count, character in
-            if character == "\n" { count += 1 }
-        })
+        let value = text as NSString
+        var count = 1
+        var location = 0
+        while location < value.length {
+            let character = value.character(at: location)
+            if character == 0x0D,
+               location + 1 < value.length,
+               value.character(at: location + 1) == 0x0A {
+                count += 1
+                location += 2
+                continue
+            }
+            if character == 0x0A
+                || character == 0x0D
+                || character == 0x2028
+                || character == 0x2029 {
+                count += 1
+            }
+            location += 1
+        }
+        return count
     }
 
     func refreshDirtyState() {
@@ -77,6 +95,29 @@ final class EditorDocument: ObservableObject, Identifiable {
     func markSaved() {
         savedText = text
         isDirty = false
+    }
+
+    func updateLocationAfterRename(from oldURL: URL, to newURL: URL) {
+        guard url?.standardizedFileURL == oldURL.standardizedFileURL else {
+            return
+        }
+        updateLocation(to: newURL)
+    }
+
+    func updateLocation(to newURL: URL) {
+        let wasMarkdown = language == .markdown
+        let newLanguage = EditorLanguage.infer(from: newURL)
+        url = newURL.standardizedFileURL
+        language = newLanguage
+        if newLanguage == .markdown, !wasMarkdown {
+            isPreviewVisible = true
+        } else if newLanguage != .markdown {
+            isPreviewVisible = false
+        }
+
+        // @Published announces before assignment. Emit once after this compound
+        // update so parent views read the new title, language, and preview state.
+        objectWillChange.send()
     }
 
     private func scheduleMetricsRefresh() {

@@ -30,7 +30,6 @@ struct MainWindowView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: appState.isSidebarVisible)
-        .navigationTitle(appState.windowTitle)
         .background(Color(nsColor: .lacEditorBackground))
         .toolbar {
             LacEditorToolbar()

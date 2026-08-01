@@ -107,7 +107,7 @@ private struct RecentFilesView: View {
                                 showInFinder: {
                                     NSWorkspace.shared.activateFileViewerSelecting([url])
                                 },
-                                rename: { appState.renameFile(url) },
+                                rename: { windowManager.requestRenameFile(url) },
                                 remove: { store.remove(url) }
                             )
                         }

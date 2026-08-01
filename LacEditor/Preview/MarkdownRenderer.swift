@@ -49,7 +49,12 @@ enum MarkdownRenderer {
     }
 
     private static func renderBlocks(_ markdown: String) -> String {
-        let lines = markdown.components(separatedBy: .newlines)
+        let normalizedMarkdown = markdown
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "\u{2028}", with: "\n")
+            .replacingOccurrences(of: "\u{2029}", with: "\n")
+        let lines = normalizedMarkdown.components(separatedBy: "\n")
         var output: [String] = []
         var paragraph: [String] = []
         var listType: String?
@@ -157,9 +162,54 @@ enum MarkdownRenderer {
 
     private static func inline(_ value: some StringProtocol) -> String {
         var result = escape(String(value))
+        var inlineCodeSegments: [String] = []
+        var placeholderPrefix = "LACXINCODEX"
+        while result.contains(placeholderPrefix) {
+            placeholderPrefix.append("X")
+        }
+        if let codeRegex = try? NSRegularExpression(pattern: #"`([^`\n]+)`"#) {
+            let matches = codeRegex.matches(
+                in: result,
+                range: NSRange(location: 0, length: (result as NSString).length)
+            )
+            let mutable = NSMutableString(string: result)
+            for match in matches.reversed() {
+                let code = (result as NSString).substring(with: match.range(at: 1))
+                let index = inlineCodeSegments.count
+                inlineCodeSegments.append("<code>\(code)</code>")
+                mutable.replaceCharacters(
+                    in: match.range,
+                    with: "\(placeholderPrefix)\(index)XENDLAC"
+                )
+            }
+            result = mutable as String
+        }
+        var linkSegments: [String] = []
+        var linkPlaceholderPrefix = "LACXLINKX"
+        while result.contains(linkPlaceholderPrefix) {
+            linkPlaceholderPrefix.append("X")
+        }
+        if let linkRegex = try? NSRegularExpression(
+            pattern: #"\[([^\]]+)\]\(([^)]+)\)"#
+        ) {
+            let matches = linkRegex.matches(
+                in: result,
+                range: NSRange(location: 0, length: (result as NSString).length)
+            )
+            let mutable = NSMutableString(string: result)
+            for match in matches.reversed() {
+                let label = (result as NSString).substring(with: match.range(at: 1))
+                let destination = (result as NSString).substring(with: match.range(at: 2))
+                let index = linkSegments.count
+                linkSegments.append("<a href=\"\(destination)\">\(label)</a>")
+                mutable.replaceCharacters(
+                    in: match.range,
+                    with: "\(linkPlaceholderPrefix)\(index)XENDLAC"
+                )
+            }
+            result = mutable as String
+        }
         let replacements: [(String, String)] = [
-            (#"`([^`\n]+)`"#, "<code>$1</code>"),
-            (#"\[([^\]]+)\]\(([^)]+)\)"#, #"<a href="$2">$1</a>"#),
             (#"\*\*([^*\n]+)\*\*"#, "<strong>$1</strong>"),
             (#"__([^_\n]+)__"#, "<strong>$1</strong>"),
             (#"(?<!\*)\*([^*\n]+)\*(?!\*)"#, "<em>$1</em>"),
@@ -169,6 +219,18 @@ enum MarkdownRenderer {
             guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
             let range = NSRange(location: 0, length: (result as NSString).length)
             result = regex.stringByReplacingMatches(in: result, range: range, withTemplate: template)
+        }
+        for (index, segment) in linkSegments.enumerated() {
+            result = result.replacingOccurrences(
+                of: "\(linkPlaceholderPrefix)\(index)XENDLAC",
+                with: segment
+            )
+        }
+        for (index, segment) in inlineCodeSegments.enumerated() {
+            result = result.replacingOccurrences(
+                of: "\(placeholderPrefix)\(index)XENDLAC",
+                with: segment
+            )
         }
         return result
     }

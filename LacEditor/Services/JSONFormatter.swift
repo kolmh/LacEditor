@@ -14,19 +14,37 @@ enum JSONFormatter {
     static func userFacingError(_ error: Error, in text: String) -> String {
         let nsError = error as NSError
         let description = nsError.localizedDescription
+        if let debugDescription = nsError.userInfo["NSDebugDescription"] as? String,
+           let location = lineAndColumn(from: debugDescription) {
+            return "JSON 无效：第 \(location.line) 行，第 \(location.column + 1) 列。\(description)"
+        }
         if let location = lineAndColumn(from: description) {
             return "JSON 无效：第 \(location.line) 行，第 \(location.column) 列。\(description)"
         }
+        if let index = nsError.userInfo["NSJSONSerializationErrorIndex"] as? Int {
+            return message(forByteIndex: index, description: description, in: text)
+        }
         if let index = byteIndex(from: description) {
-            let prefix = text.utf8.prefix(index)
-            let decodedPrefix = String(decoding: prefix, as: UTF8.self)
-            let line = decodedPrefix.reduce(into: 1) { count, character in
-                if character == "\n" { count += 1 }
-            }
-            let column = decodedPrefix.split(separator: "\n", omittingEmptySubsequences: false).last?.count ?? 0
-            return "JSON 无效：第 \(line) 行，第 \(column + 1) 列。\(description)"
+            return message(forByteIndex: index, description: description, in: text)
         }
         return "JSON 无效：\(description)"
+    }
+
+    private static func message(
+        forByteIndex index: Int,
+        description: String,
+        in text: String
+    ) -> String {
+        let prefix = text.utf8.prefix(max(0, index))
+        let decodedPrefix = String(decoding: prefix, as: UTF8.self)
+        let line = decodedPrefix.reduce(into: 1) { count, character in
+            if character == "\n" { count += 1 }
+        }
+        let column = decodedPrefix.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).last?.count ?? 0
+        return "JSON 无效：第 \(line) 行，第 \(column + 1) 列。\(description)"
     }
 
     private static func lineAndColumn(from description: String) -> (line: Int, column: Int)? {

@@ -23,11 +23,32 @@ enum EditorCommandNotification {
     static let toggleFold = Notification.Name("LacEditor.toggleFold")
     static let undo = Notification.Name("LacEditor.undo")
     static let redo = Notification.Name("LacEditor.redo")
+    static let applyTextUpdate = Notification.Name("LacEditor.applyTextUpdate")
 }
 
 struct EditorSelectionRequest {
     let documentID: UUID
     let range: NSRange
+}
+
+final class EditorTextUpdateRequest {
+    let documentID: UUID
+    let text: String
+    let selectionRange: NSRange
+    let actionName: String
+    var wasHandled = false
+
+    init(
+        documentID: UUID,
+        text: String,
+        selectionRange: NSRange,
+        actionName: String
+    ) {
+        self.documentID = documentID
+        self.text = text
+        self.selectionRange = selectionRange
+        self.actionName = actionName
+    }
 }
 
 @MainActor
@@ -70,7 +91,7 @@ final class AppState: ObservableObject {
     let recentFiles: RecentFilesStore
     let findReplace = FindReplaceState()
     weak var hostWindow: NSWindow?
-    private var findReplacePanelController: FindReplacePanelController?
+    private var findReplaceWindowController: FindReplaceWindowController?
     private let fileService = FileService()
     private var documentCancellables: [UUID: AnyCancellable] = [:]
     private var sidebarPreviewDismissWorkItem: DispatchWorkItem?
@@ -358,8 +379,13 @@ final class AppState: ObservableObject {
     func formatJSON(pretty: Bool = true) {
         guard let document = selectedDocument, document.language == .json else { return }
         do {
-            document.text = try JSONFormatter.format(document.text, pretty: pretty)
-            document.refreshDirtyState()
+            let formatted = try JSONFormatter.format(document.text, pretty: pretty)
+            applyTextUpdate(
+                formatted,
+                to: document,
+                selectionRange: document.selectionRange,
+                actionName: pretty ? "格式化 JSON" : "压缩 JSON"
+            )
             document.statusMessage = pretty ? "JSON 已格式化" : "JSON 已压缩"
         } catch {
             document.statusMessage = JSONFormatter.userFacingError(error, in: document.text)
@@ -370,16 +396,16 @@ final class AppState: ObservableObject {
         findReplace.mode = mode
         findReplace.message = nil
         guard let hostWindow else { return }
-        let controller = findReplacePanelController ?? FindReplacePanelController(
+        let controller = findReplaceWindowController ?? FindReplaceWindowController(
             appState: self
         )
-        findReplacePanelController = controller
+        findReplaceWindowController = controller
         controller.present(mode: mode, relativeTo: hostWindow)
     }
 
     func dismissFindReplace() {
-        findReplacePanelController?.dismiss()
-        findReplacePanelController = nil
+        findReplaceWindowController?.dismiss()
+        findReplaceWindowController = nil
     }
 
     func findNext() {
@@ -446,13 +472,16 @@ final class AppState: ObservableObject {
         let mutable = NSMutableString(string: document.text)
         let originalRange = document.selectionRange
         mutable.replaceCharacters(in: originalRange, with: replacement)
-        document.text = mutable as String
-        document.refreshDirtyState()
         let nextSelection = NSRange(
             location: originalRange.location,
             length: (replacement as NSString).length
         )
-        reveal(nextSelection, in: document)
+        applyTextUpdate(
+            mutable as String,
+            to: document,
+            selectionRange: nextSelection,
+            actionName: "替换"
+        )
         findReplace.message = "已替换 1 处"
     }
 
@@ -477,9 +506,12 @@ final class AppState: ObservableObject {
             findReplace.message = "未找到匹配内容"
             return
         }
-        document.text = result.text
-        document.refreshDirtyState()
-        reveal(NSRange(location: 0, length: 0), in: document)
+        applyTextUpdate(
+            result.text,
+            to: document,
+            selectionRange: NSRange(location: 0, length: 0),
+            actionName: "全部替换"
+        )
         findReplace.message = "已替换 \(result.count) 处"
     }
 
@@ -495,42 +527,9 @@ final class AppState: ObservableObject {
         editorFontSize = defaultFontSize
     }
 
-    func renameFile(_ url: URL) {
-        let alert = NSAlert()
-        alert.messageText = "重命名文件"
-        alert.informativeText = "请输入新的文件名。"
-        alert.addButton(withTitle: "重命名")
-        alert.addButton(withTitle: "取消")
-
-        let nameField = NSTextField(
-            frame: NSRect(x: 0, y: 0, width: 320, height: 24)
-        )
-        nameField.stringValue = url.lastPathComponent
-        nameField.selectText(nil)
-        alert.accessoryView = nameField
-
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let newName = nameField.stringValue.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-
-        do {
-            let newURL = try fileService.rename(url, to: newName)
-            for document in documents
-            where document.url?.standardizedFileURL == url.standardizedFileURL {
-                let wasMarkdown = document.language == .markdown
-                let language = EditorLanguage.infer(from: newURL)
-                document.url = newURL
-                document.language = language
-                if language == .markdown, !wasMarkdown {
-                    document.isPreviewVisible = true
-                } else if language != .markdown {
-                    document.isPreviewVisible = false
-                }
-            }
-            recentFiles.replace(url, with: newURL)
-        } catch {
-            presentError(title: "无法重命名文件", error: error)
+    func updateRenamedFileReference(from oldURL: URL, to newURL: URL) {
+        for document in documents {
+            document.updateLocationAfterRename(from: oldURL, to: newURL)
         }
     }
 
@@ -581,14 +580,43 @@ final class AppState: ObservableObject {
         )
     }
 
+    private func applyTextUpdate(
+        _ text: String,
+        to document: EditorDocument,
+        selectionRange: NSRange,
+        actionName: String
+    ) {
+        guard text != document.text else { return }
+        let textLength = (text as NSString).length
+        let safeLocation = min(selectionRange.location, textLength)
+        let safeSelection = NSRange(
+            location: safeLocation,
+            length: min(selectionRange.length, textLength - safeLocation)
+        )
+        let request = EditorTextUpdateRequest(
+            documentID: document.id,
+            text: text,
+            selectionRange: safeSelection,
+            actionName: actionName
+        )
+        NotificationCenter.default.post(
+            name: EditorCommandNotification.applyTextUpdate,
+            object: request
+        )
+
+        guard !request.wasHandled else { return }
+        document.text = text
+        document.selectionRange = safeSelection
+        document.refreshDirtyState()
+    }
+
     private func write(_ document: EditorDocument, to url: URL) -> Bool {
         do {
             try fileService.write(document.text, to: url)
-            document.url = url.standardizedFileURL
-            document.language = EditorLanguage.infer(from: url)
+            document.updateLocation(to: url)
             document.encodingName = "UTF-8"
             document.markSaved()
-            document.statusMessage = "已保存"
+            document.statusMessage = nil
             recentFiles.record(url)
             return true
         } catch {

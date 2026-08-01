@@ -81,7 +81,11 @@ struct LacEditorCommands: Commands {
                 .disabled(appState == nil)
             Divider()
             Button {
-                appState?.closeSelectedDocument()
+                if NSApp.keyWindow?.identifier == FindReplaceWindowIdentity.identifier {
+                    NSApp.keyWindow?.performClose(nil)
+                } else {
+                    appState?.closeSelectedDocument()
+                }
             } label: {
                 Label("关闭标签页", systemImage: "xmark.square")
             }

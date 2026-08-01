@@ -35,6 +35,26 @@ swiftc \
 .build/core-verification
 ```
 
+折叠布局高度、展开恢复和编辑边界可独立验证：
+
+```bash
+swiftc \
+  LacEditor/Editor/FoldLayoutManager.swift \
+  LacEditor/Editor/LogicalLineIndex.swift \
+  Verification/FoldLayoutVerification.swift \
+  -o .build/fold-layout-verification
+.build/fold-layout-verification
+```
+
+完整验收（发布构建、核心逻辑、全部文件格式往返、性能基线、产物与隐私检查）运行：
+
+```bash
+./Scripts/run-acceptance.sh
+```
+
+人工 UI 验收标准和通过门槛见 [ACCEPTANCE_TESTS.md](ACCEPTANCE_TESTS.md)。脚本会另外构建
+Bundle ID 隔离的 UI 验收 App，避免污染正式应用的最近文件和界面偏好。
+
 ## 版本与发布
 
 - [CHANGELOG.md](CHANGELOG.md)：按版本记录面向用户的新增、优化和修复内容。
@@ -69,7 +89,8 @@ swiftc \
 - 标签关闭按钮按需显示；标签过多时可在标签栏上用滚轮横向浏览，边缘淡出并自动定位当前标签。
 - 关闭标签、窗口或退出前的逐文档保存确认；最后一个有内容标签关闭后保留空白标签，
   再关闭该空白标签则关闭窗口。
-- 原生撤销/重做；统一的查找与替换弹窗支持 `\n`、`\t`、`\s`、`\r`、`\\` 转义字符、区分大小写和全部替换。
+- 原生撤销/重做；非模态的独立查找与替换窗口支持 `\n`、`\t`、`\s`、`\r`、`\\`
+  转义字符、区分大小写和全部替换，窗口打开时仍可编辑正文。
 - 中文输入法组合、与逻辑文本行对齐的行号、当前行、自动缩进、Tab 缩进、列表自动续写和自动换行。
 - 字体缩放、Markdown 标题与 JSON 容器的基础折叠。
 - Markdown、JSON、HTML、JavaScript、TypeScript、CSS、Python、Swift、Shell、YAML、
