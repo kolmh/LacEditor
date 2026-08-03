@@ -6,6 +6,7 @@ struct EditorTextView: NSViewRepresentable {
     let fontSize: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
+    let topInset: CGFloat
     let isActive: Bool
 
     func makeCoordinator() -> Coordinator {
@@ -47,8 +48,8 @@ struct EditorTextView: NSViewRepresentable {
         textView.usesFindPanel = true
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
-        textView.textContainerInset = NSSize(width: 10, height: 0)
-        textContainer.lineFragmentPadding = 2
+        textView.textContainerInset = NSSize(width: 0, height: topInset)
+        textContainer.lineFragmentPadding = 0
         textView.backgroundColor = NSColor.lacEditorBackground
         textView.drawsBackground = true
         textView.string = document.text
@@ -105,6 +106,7 @@ struct EditorTextView: NSViewRepresentable {
         context.coordinator.currentFontSize = fontSize
         context.coordinator.currentLanguage = document.language
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
+        context.coordinator.updateTopInset(topInset)
         context.coordinator.updateActivity(isActive)
 
         // Marked text is owned by the input method. Replacing the string or its
@@ -371,6 +373,16 @@ struct EditorTextView: NSViewRepresentable {
             scrollView.rulersVisible = isVisible
             lastRulerWidth = -1
             ruler?.needsDisplay = true
+        }
+
+        func updateTopInset(_ topInset: CGFloat) {
+            guard let textView,
+                  abs(textView.textContainerInset.height - topInset) > 0.5 else {
+                return
+            }
+            textView.textContainerInset = NSSize(width: 0, height: topInset)
+            textView.needsDisplay = true
+            refreshRuler()
         }
 
         func updateActivity(_ newValue: Bool) {

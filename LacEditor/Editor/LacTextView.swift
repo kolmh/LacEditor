@@ -58,9 +58,9 @@ final class LacTextView: NSTextView {
             forCharacterRange: lineRange,
             actualCharacterRange: nil
         )
-        var lineRect: NSRect
+        var lineRects: [NSRect] = []
         if glyphRange.length == 0, location == (string as NSString).length {
-            lineRect = layoutManager.extraLineFragmentRect
+            var lineRect = layoutManager.extraLineFragmentRect
             if lineRect.isEmpty {
                 lineRect = NSRect(
                     x: 0,
@@ -69,17 +69,24 @@ final class LacTextView: NSTextView {
                     height: defaultParagraphStyle?.maximumLineHeight ?? 18
                 )
             }
+            lineRects.append(lineRect)
         } else {
-            lineRect = layoutManager.lineFragmentRect(
-                forGlyphAt: glyphRange.location,
-                effectiveRange: nil
-            )
+            layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+                lineRect,
+                _,
+                _,
+                _,
+                _ in
+                lineRects.append(lineRect)
+            }
         }
-        lineRect.origin.x = 0
-        lineRect.origin.y += textContainerOrigin.y
-        lineRect.size.width = bounds.width
         currentLineColor.setFill()
-        lineRect.intersection(rect).fill()
+        for var lineRect in lineRects {
+            lineRect.origin.x = 0
+            lineRect.origin.y += textContainerOrigin.y
+            lineRect.size.width = bounds.width
+            lineRect.intersection(rect).fill()
+        }
     }
 
     override func insertTab(_ sender: Any?) {

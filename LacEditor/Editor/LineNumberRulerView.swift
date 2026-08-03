@@ -53,18 +53,10 @@ final class LineNumberRulerView: NSRulerView {
             || trailingCharacter == 0x0D
             || trailingCharacter == 0x2028
             || trailingCharacter == 0x2029
-        let selectionLocation = min(textView.selectedRange().location, nsString.length)
-        let activeLineLocation: Int
-        if selectionLocation == nsString.length, hasTrailingEmptyLine {
-            activeLineLocation = nsString.length
-        } else if nsString.length > 0 {
-            let anchor = min(selectionLocation, nsString.length - 1)
-            activeLineLocation = nsString.lineRange(
-                for: NSRange(location: anchor, length: 0)
-            ).location
-        } else {
-            activeLineLocation = 0
-        }
+        let selectedLineLocations = LogicalLineIndex.selectedLineLocations(
+            in: nsString,
+            selectedRange: textView.selectedRange()
+        )
         let firstCharacterLocation: Int
         if containerRect.minY <= 0.5 || nsString.length == 0 {
             firstCharacterLocation = 0
@@ -112,14 +104,15 @@ final class LineNumberRulerView: NSRulerView {
             }
             let anchor = LogicalLineIndex.layoutAnchorCharacterIndex(
                 in: nsString,
-                lineRange: lineRange
+                lineRange: lineRange,
+                foldedRange: (layoutManager as? FoldLayoutManager)?.foldedRange
             )
             let glyphIndex = layoutManager.glyphIndexForCharacter(at: anchor)
             var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
             lineRect.origin.x += textView.textContainerOrigin.x
             lineRect.origin.y += textView.textContainerOrigin.y
             let rulerRect = convert(lineRect, from: textView)
-            let isActive = lineRange.location == activeLineLocation
+            let isActive = selectedLineLocations.contains(lineRange.location)
             let rowHeight = max(rulerRect.height, font.pointSize + 4)
             if !capturedTopLine,
                rulerRect.maxY >= bounds.minY,
@@ -163,7 +156,7 @@ final class LineNumberRulerView: NSRulerView {
             }
             let rulerRect = convert(textViewRect, from: textView)
             let rowHeight = max(rulerRect.height, font.pointSize + 4)
-            let isActive = activeLineLocation == nsString.length
+            let isActive = selectedLineLocations.contains(nsString.length)
             if !capturedTopLine,
                rulerRect.maxY >= bounds.minY,
                rulerRect.minY <= bounds.maxY {

@@ -7,6 +7,38 @@ private func require(_ condition: @autoclosure () -> Bool, _ message: String) {
     }
 }
 
+let selectedLineSource = "first\nsecond wraps here\nthird\n" as NSString
+let selectedLineBounds = LogicalLineIndex.selectedLineLocations(
+    in: selectedLineSource,
+    selectedRange: NSRange(location: 2, length: 23)
+)
+require(
+    selectedLineBounds.contains(0),
+    "multi-line selection includes its first line"
+)
+require(
+    selectedLineBounds.contains(6),
+    "multi-line selection includes its middle line"
+)
+require(
+    selectedLineBounds.contains(24),
+    "multi-line selection includes its last line"
+)
+require(
+    !selectedLineBounds.contains(selectedLineSource.length),
+    "multi-line selection excludes an unselected trailing empty line"
+)
+let wrappedLineRange = selectedLineSource.lineRange(
+    for: NSRange(location: 6, length: 0)
+)
+require(
+    LogicalLineIndex.layoutAnchorCharacterIndex(
+        in: selectedLineSource,
+        lineRange: wrappedLineRange
+    ) == wrappedLineRange.location,
+    "wrapped line number uses the first visual fragment"
+)
+
 do {
     let pretty = try JSONFormatter.format(#"{"name":"LacEditor","enabled":true}"#, pretty: true)
     require(pretty.contains(#""enabled" : true"#), "pretty JSON output")

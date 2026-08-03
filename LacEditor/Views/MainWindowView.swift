@@ -97,6 +97,7 @@ struct MainWindowView: View {
                             fontSize: appState.editorFontSize,
                             wordWrap: appState.isWordWrapEnabled,
                             showsLineNumbers: appState.isLineNumbersVisible,
+                            editorTopInset: showsTabBar ? 6 : 0,
                             darkMode: colorScheme == .dark
                         )
                         .opacity(document.id == selectedDocument.id ? 1 : 0)
@@ -145,6 +146,7 @@ private struct DocumentEditorPane: View {
     let fontSize: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
+    let editorTopInset: CGFloat
     let darkMode: Bool
 
     var body: some View {
@@ -172,6 +174,7 @@ private struct DocumentEditorPane: View {
             fontSize: fontSize,
             wordWrap: wordWrap,
             showsLineNumbers: showsLineNumbers,
+            topInset: editorTopInset,
             isActive: isActive
         )
     }

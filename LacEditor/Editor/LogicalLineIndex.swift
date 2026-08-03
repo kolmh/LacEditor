@@ -168,9 +168,44 @@ final class LogicalLineIndex {
 }
 
 extension LogicalLineIndex {
+    static func selectedLineLocations(
+        in text: NSString,
+        selectedRange: NSRange
+    ) -> ClosedRange<Int> {
+        let selectionLocation = min(max(0, selectedRange.location), text.length)
+        let selectionLength = min(
+            max(0, selectedRange.length),
+            text.length - selectionLocation
+        )
+
+        let firstLineLocation: Int
+        if selectionLocation == text.length,
+           text.length == 0 || isLineSeparator(text.character(at: text.length - 1)) {
+            firstLineLocation = text.length
+        } else {
+            let firstAnchor = min(selectionLocation, max(0, text.length - 1))
+            firstLineLocation = text.lineRange(
+                for: NSRange(location: firstAnchor, length: 0)
+            ).location
+        }
+
+        guard selectionLength > 0 else {
+            return firstLineLocation...firstLineLocation
+        }
+        let lastAnchor = selectionLocation + selectionLength - 1
+        let lastLineLocation = text.lineRange(
+            for: NSRange(location: lastAnchor, length: 0)
+        ).location
+        return min(firstLineLocation, lastLineLocation)...max(
+            firstLineLocation,
+            lastLineLocation
+        )
+    }
+
     static func layoutAnchorCharacterIndex(
         in text: NSString,
-        lineRange: NSRange
+        lineRange: NSRange,
+        foldedRange: NSRange? = nil
     ) -> Int {
         var contentEnd = NSMaxRange(lineRange)
         while contentEnd > lineRange.location {
@@ -183,8 +218,11 @@ extension LogicalLineIndex {
             }
             contentEnd -= 1
         }
-        return contentEnd > lineRange.location
-            ? contentEnd - 1
-            : lineRange.location
+        guard contentEnd > lineRange.location else { return lineRange.location }
+        if let foldedRange,
+           NSLocationInRange(lineRange.location, foldedRange) {
+            return min(NSMaxRange(foldedRange), contentEnd - 1)
+        }
+        return lineRange.location
     }
 }

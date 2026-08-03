@@ -40,7 +40,8 @@ enum FoldLayoutVerification {
                     in: source as NSString,
                     lineRange: (source as NSString).lineRange(
                         for: NSRange(location: nextHeadingLocation, length: 0)
-                    )
+                    ),
+                    foldedRange: layoutManager.foldedRange
                 )
             ),
             effectiveRange: nil
@@ -101,7 +102,8 @@ enum FoldLayoutVerification {
             forGlyphAt: jsonLayoutManager.glyphIndexForCharacter(
                 at: LogicalLineIndex.layoutAnchorCharacterIndex(
                     in: jsonNSString,
-                    lineRange: closingLineRange
+                    lineRange: closingLineRange,
+                    foldedRange: jsonLayoutManager.foldedRange
                 )
             ),
             effectiveRange: nil
