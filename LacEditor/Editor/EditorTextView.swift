@@ -634,9 +634,9 @@ struct EditorTextView: NSViewRepresentable {
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !isRestoringOffscreenEdit,
                   textView?.hasMarkedText() != true else { return }
-            updateCursor()
             textView?.needsDisplay = true
-            invalidateEntireRuler()
+            invalidateEntireRuler(displayImmediately: true)
+            updateCursor()
         }
 
         func synchronizeSelectionState() {
@@ -739,11 +739,14 @@ struct EditorTextView: NSViewRepresentable {
             }
         }
 
-        private func invalidateEntireRuler() {
+        private func invalidateEntireRuler(displayImmediately: Bool = false) {
             guard let ruler else { return }
             ruler.invalidateHashMarks()
             ruler.needsDisplay = true
             ruler.setNeedsDisplay(ruler.bounds)
+            if displayImmediately {
+                ruler.displaySelectionImmediately()
+            }
         }
 
         func resetLineIndex(with text: String) {

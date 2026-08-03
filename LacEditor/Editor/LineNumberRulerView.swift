@@ -19,6 +19,11 @@ final class LineNumberRulerView: NSRulerView {
         fatalError("init(coder:) has not been implemented")
     }
 
+    func displaySelectionImmediately() {
+        displayIfNeeded()
+        topLineOverlay.displayIfNeeded()
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         drawHashMarksAndLabels(in: bounds)
     }
@@ -109,9 +114,14 @@ final class LineNumberRulerView: NSRulerView {
             )
             let glyphIndex = layoutManager.glyphIndexForCharacter(at: anchor)
             var lineRect = layoutManager.lineFragmentRect(forGlyphAt: glyphIndex, effectiveRange: nil)
+            let baselineOffset = layoutManager.location(forGlyphAt: glyphIndex).y
             lineRect.origin.x += textView.textContainerOrigin.x
             lineRect.origin.y += textView.textContainerOrigin.y
             let rulerRect = convert(lineRect, from: textView)
+            let baselineY = convert(
+                NSPoint(x: lineRect.minX, y: lineRect.minY + baselineOffset),
+                from: textView
+            ).y
             let isActive = selectedLineLocations.contains(lineRange.location)
             let rowHeight = max(rulerRect.height, font.pointSize + 4)
             if !capturedTopLine,
@@ -122,6 +132,7 @@ final class LineNumberRulerView: NSRulerView {
                     lineNumber: lineNumber,
                     labelY: rulerRect.minY,
                     rowHeight: rowHeight,
+                    baselineY: baselineY,
                     rulerWidth: bounds.width,
                     isActive: isActive
                 )
@@ -131,8 +142,7 @@ final class LineNumberRulerView: NSRulerView {
                layoutTracker.shouldDraw(at: rulerRect.minY) {
                 draw(
                     lineNumber: lineNumber,
-                    y: rulerRect.minY,
-                    rowHeight: rowHeight,
+                    baselineY: baselineY,
                     isActive: isActive
                 )
             }
@@ -156,6 +166,10 @@ final class LineNumberRulerView: NSRulerView {
             }
             let rulerRect = convert(textViewRect, from: textView)
             let rowHeight = max(rulerRect.height, font.pointSize + 4)
+            let editorFont = textView.font
+                ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+            let baselineY = rulerRect.minY
+                + layoutManager.defaultBaselineOffset(for: editorFont)
             let isActive = selectedLineLocations.contains(nsString.length)
             if !capturedTopLine,
                rulerRect.maxY >= bounds.minY,
@@ -164,6 +178,7 @@ final class LineNumberRulerView: NSRulerView {
                     lineNumber: lineNumber,
                     labelY: rulerRect.minY,
                     rowHeight: rowHeight,
+                    baselineY: baselineY,
                     rulerWidth: bounds.width,
                     isActive: isActive
                 )
@@ -173,8 +188,7 @@ final class LineNumberRulerView: NSRulerView {
                layoutTracker.shouldDraw(at: rulerRect.minY) {
                 draw(
                     lineNumber: lineNumber,
-                    y: rulerRect.minY,
-                    rowHeight: rowHeight,
+                    baselineY: baselineY,
                     isActive: isActive
                 )
             }
@@ -183,8 +197,7 @@ final class LineNumberRulerView: NSRulerView {
 
     private func draw(
         lineNumber: Int,
-        y: CGFloat,
-        rowHeight: CGFloat,
+        baselineY: CGFloat,
         isActive: Bool
     ) {
         let attributes: [NSAttributedString.Key: Any] = [
@@ -198,7 +211,7 @@ final class LineNumberRulerView: NSRulerView {
         value.draw(
             at: NSPoint(
                 x: floor((bounds.width - size.width) / 2),
-                y: floor(y + max(0, rowHeight - size.height) / 2)
+                y: baselineY - font.ascender
             ),
             withAttributes: attributes
         )
@@ -207,26 +220,26 @@ final class LineNumberRulerView: NSRulerView {
 
 private final class LineNumberTopOverlayView: NSView {
     override var isOpaque: Bool { true }
+    override var isFlipped: Bool { true }
 
     private let font = NSFont.monospacedDigitSystemFont(
         ofSize: 11,
         weight: .regular
     )
     private var lineNumber = 1
-    private var labelY: CGFloat = 0
-    private var rowHeight: CGFloat = 0
+    private var baselineY: CGFloat = 0
     private var isActive = false
 
     func update(
         lineNumber: Int,
         labelY: CGFloat,
         rowHeight: CGFloat,
+        baselineY: CGFloat,
         rulerWidth: CGFloat,
         isActive: Bool
     ) {
         self.lineNumber = lineNumber
-        self.labelY = labelY
-        self.rowHeight = rowHeight
+        self.baselineY = baselineY
         self.isActive = isActive
         frame = NSRect(
             x: 0,
@@ -253,7 +266,7 @@ private final class LineNumberTopOverlayView: NSView {
         value.draw(
             at: NSPoint(
                 x: floor((bounds.width - size.width) / 2),
-                y: floor(labelY + max(0, rowHeight - size.height) / 2)
+                y: baselineY - font.ascender
             ),
             withAttributes: attributes
         )
