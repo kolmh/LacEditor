@@ -59,6 +59,13 @@ swiftc \
     -o .build/fold-layout-verification
 .build/fold-layout-verification
 
+swiftc \
+    LacEditor/Editor/ListContinuationService.swift \
+    LacEditor/Editor/LacTextView.swift \
+    Verification/EditorInteractionVerification.swift \
+    -o .build/editor-interaction-verification
+.build/editor-interaction-verification
+
 xcodebuild \
     -quiet \
     -project LacEditor.xcodeproj \

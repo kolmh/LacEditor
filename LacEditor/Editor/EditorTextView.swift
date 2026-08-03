@@ -82,6 +82,9 @@ struct EditorTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.foldLayoutManager = layoutManager
         context.coordinator.ruler = ruler
+        textView.selectionTrackingHandler = { [weak coordinator = context.coordinator] in
+            coordinator?.selectionDidChangeDuringTracking()
+        }
         ruler.lineNumberProvider = { [weak coordinator = context.coordinator] location in
             coordinator?.lineNumber(at: location) ?? 1
         }
@@ -637,6 +640,13 @@ struct EditorTextView: NSViewRepresentable {
             textView?.needsDisplay = true
             invalidateEntireRuler(displayImmediately: true)
             updateCursor()
+        }
+
+        func selectionDidChangeDuringTracking() {
+            guard !isRestoringOffscreenEdit,
+                  textView?.hasMarkedText() != true else { return }
+            textView?.needsDisplay = true
+            invalidateEntireRuler(displayImmediately: true)
         }
 
         func synchronizeSelectionState() {

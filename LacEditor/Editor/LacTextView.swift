@@ -35,6 +35,22 @@ extension NSColor {
 
 final class LacTextView: NSTextView {
     var currentLineColor: NSColor = .lacCurrentLineBackground
+    var selectionTrackingHandler: (() -> Void)?
+
+    override func setSelectedRange(
+        _ charRange: NSRange,
+        affinity: NSSelectionAffinity,
+        stillSelecting flag: Bool
+    ) {
+        super.setSelectedRange(
+            charRange,
+            affinity: affinity,
+            stillSelecting: flag
+        )
+        if flag {
+            selectionTrackingHandler?()
+        }
+    }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
