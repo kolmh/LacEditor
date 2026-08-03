@@ -7,6 +7,13 @@ struct DecodedFile {
     let text: String
     let encoding: String.Encoding
     let encodingName: String
+    let byteCount: Int
+    let lineCount: Int
+}
+
+enum PreparedFileRead {
+    case decoded(DecodedFile)
+    case needsEncoding(Data, byteCount: Int)
 }
 
 enum FileServiceError: LocalizedError {
@@ -62,8 +69,46 @@ final class FileService {
     func read(_ url: URL) throws -> DecodedFile {
         let data = try Data(contentsOf: url)
         if let text = String(data: data, encoding: .utf8) {
-            return DecodedFile(text: text, encoding: .utf8, encodingName: "UTF-8")
+            return DecodedFile(
+                text: text,
+                encoding: .utf8,
+                encodingName: "UTF-8",
+                byteCount: data.count,
+                lineCount: Self.countLines(in: text)
+            )
         }
+
+        return try decodeUsingSelectedEncoding(data, from: url)
+    }
+
+    nonisolated static func prepareRead(_ url: URL) throws -> PreparedFileRead {
+        let byteCount = try fileByteCount(at: url)
+        let options: Data.ReadingOptions = byteCount > 20 * 1_024 * 1_024
+            ? .mappedIfSafe
+            : []
+        let data = try Data(contentsOf: url, options: options)
+        if let text = String(data: data, encoding: .utf8) {
+            return .decoded(DecodedFile(
+                text: text,
+                encoding: .utf8,
+                encodingName: "UTF-8",
+                byteCount: byteCount,
+                lineCount: countLines(in: text)
+            ))
+        }
+        return .needsEncoding(data, byteCount: byteCount)
+    }
+
+    nonisolated static func fileByteCount(at url: URL) throws -> Int {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey])
+        return values.fileSize ?? 0
+    }
+
+    func decodeUsingSelectedEncoding(
+        _ data: Data,
+        from url: URL,
+        byteCount: Int? = nil
+    ) throws -> DecodedFile {
 
         let gb18030 = String.Encoding(
             rawValue: CFStringConvertEncodingToNSStringEncoding(
@@ -93,14 +138,45 @@ final class FileService {
         guard let text = String(data: data, encoding: selected.1) else {
             throw FileServiceError.unsupportedEncoding
         }
-        return DecodedFile(text: text, encoding: selected.1, encodingName: selected.0)
+        return DecodedFile(
+            text: text,
+            encoding: selected.1,
+            encodingName: selected.0,
+            byteCount: byteCount ?? data.count,
+            lineCount: Self.countLines(in: text)
+        )
     }
 
     func write(_ text: String, to url: URL) throws {
+        try Self.writeUTF8(text, to: url)
+    }
+
+    nonisolated static func writeUTF8(_ text: String, to url: URL) throws {
         guard let data = text.data(using: .utf8) else {
             throw FileServiceError.unsupportedEncoding
         }
         try data.write(to: url, options: .atomic)
+    }
+
+    nonisolated private static func countLines(in text: String) -> Int {
+        var count = 1
+        var previousWasCR = false
+        for scalar in text.unicodeScalars {
+            switch scalar.value {
+            case 0x0A:
+                if !previousWasCR { count += 1 }
+                previousWasCR = false
+            case 0x0D:
+                count += 1
+                previousWasCR = true
+            case 0x2028, 0x2029:
+                count += 1
+                previousWasCR = false
+            default:
+                previousWasCR = false
+            }
+        }
+        return count
     }
 
     func rename(_ url: URL, to newName: String) throws -> URL {

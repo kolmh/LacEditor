@@ -69,15 +69,15 @@ struct LacEditorToolbar: ToolbarContent {
                     Button {
                         appState.togglePreview()
                     } label: {
-                        Image(systemName: document.isPreviewVisible ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
+                        Image(systemName: document.isPreviewEffectivelyEnabled ? "rectangle.split.2x1.fill" : "rectangle.split.2x1")
                     }
                     .accessibilityLabel(
-                        document.isPreviewVisible
+                        document.isPreviewEffectivelyEnabled
                             ? "隐藏 Markdown 预览"
                             : "显示 Markdown 预览"
                     )
                     .stableHelp(
-                        document.isPreviewVisible ? "隐藏 Markdown 预览" : "显示 Markdown 预览",
+                        document.isPreviewEffectivelyEnabled ? "隐藏 Markdown 预览" : "显示 Markdown 预览",
                         shortcut: "⌥⌘P"
                     )
                 }

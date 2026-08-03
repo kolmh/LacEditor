@@ -1,8 +1,15 @@
 import AppKit
+import os
 import SwiftUI
+
+private let editorPerformanceLog = OSLog(
+    subsystem: "com.laceditor.LacEditor",
+    category: "EditorPerformance"
+)
 
 struct EditorTextView: NSViewRepresentable {
     @ObservedObject var document: EditorDocument
+    let sessionStore: EditorSessionStore
     let fontSize: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
@@ -10,10 +17,33 @@ struct EditorTextView: NSViewRepresentable {
     let isActive: Bool
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(document: document)
+        sessionStore.coordinator(for: document)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
+        if let cachedView = sessionStore.cachedView(for: document.id) {
+            os_signpost(
+                .event,
+                log: editorPerformanceLog,
+                name: "EditorSessionReattach"
+            )
+            return cachedView
+        }
+        let createSignpostID = OSSignpostID(log: editorPerformanceLog)
+        os_signpost(
+            .begin,
+            log: editorPerformanceLog,
+            name: "EditorSessionCreate",
+            signpostID: createSignpostID
+        )
+        defer {
+            os_signpost(
+                .end,
+                log: editorPerformanceLog,
+                name: "EditorSessionCreate",
+                signpostID: createSignpostID
+            )
+        }
         let scrollView = NSScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = !wordWrap
@@ -23,6 +53,8 @@ struct EditorTextView: NSViewRepresentable {
 
         let textStorage = NSTextStorage()
         let layoutManager = FoldLayoutManager()
+        layoutManager.allowsNonContiguousLayout = document.isLargeFileMode
+        layoutManager.backgroundLayoutEnabled = !document.isLargeFileMode
         textStorage.addLayoutManager(layoutManager)
         let initialSize = scrollView.contentSize
         let textContainer = NSTextContainer(
@@ -38,7 +70,6 @@ struct EditorTextView: NSViewRepresentable {
             frame: NSRect(origin: .zero, size: initialSize),
             textContainer: textContainer
         )
-        textView.delegate = context.coordinator
         textView.isRichText = false
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -62,6 +93,7 @@ struct EditorTextView: NSViewRepresentable {
                 textLength - selectionLocation
             )
         ))
+        textView.delegate = context.coordinator
         textView.font = editorFont(size: fontSize)
         textView.minSize = NSSize.zero
         textView.maxSize = NSSize(
@@ -82,6 +114,7 @@ struct EditorTextView: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.foldLayoutManager = layoutManager
         context.coordinator.ruler = ruler
+        context.coordinator.attachLiveTextProvider()
         textView.selectionTrackingHandler = { [weak coordinator = context.coordinator] in
             coordinator?.selectionDidChangeDuringTracking()
         }
@@ -90,6 +123,7 @@ struct EditorTextView: NSViewRepresentable {
         }
         context.coordinator.currentFontSize = fontSize
         context.coordinator.currentLanguage = document.language
+        context.coordinator.updatePerformanceFeatures()
         context.coordinator.lastSynchronizedRevision = document.textRevision
         context.coordinator.installObservers(scrollView: scrollView)
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
@@ -97,7 +131,21 @@ struct EditorTextView: NSViewRepresentable {
         context.coordinator.updateActivity(isActive)
         context.coordinator.synchronizeSelectionState()
         context.coordinator.scheduleHighlight(delay: 0)
+        context.coordinator.restoreViewportState()
+        sessionStore.store(
+            scrollView,
+            coordinator: context.coordinator,
+            for: document.id
+        )
         return scrollView
+    }
+
+    static func dismantleNSView(
+        _ scrollView: NSScrollView,
+        coordinator: Coordinator
+    ) {
+        coordinator.flushModelText(reconcileDirtyState: true)
+        coordinator.updateActivity(false)
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
@@ -105,9 +153,13 @@ struct EditorTextView: NSViewRepresentable {
         let documentChanged = context.coordinator.document.id != document.id
         let fontChanged = context.coordinator.currentFontSize != fontSize
         let languageChanged = context.coordinator.currentLanguage != document.language
+        if documentChanged || languageChanged {
+            context.coordinator.resetSyntaxHighlightContext()
+        }
         context.coordinator.document = document
         context.coordinator.currentFontSize = fontSize
         context.coordinator.currentLanguage = document.language
+        context.coordinator.updatePerformanceFeatures()
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
         context.coordinator.updateTopInset(topInset)
         context.coordinator.updateActivity(isActive)
@@ -119,14 +171,19 @@ struct EditorTextView: NSViewRepresentable {
         let revisionChanged = context.coordinator.lastSynchronizedRevision
             != document.textRevision
         if documentChanged || revisionChanged {
+            if revisionChanged, !documentChanged {
+                context.coordinator.resetSyntaxHighlightContext()
+            }
+            context.coordinator.advanceContentRevision()
             context.coordinator.isApplyingExternalUpdate = true
             context.coordinator.clearFold()
+            let requestedSelection = document.selectionRange
             textView.string = document.text
             context.coordinator.resetLineIndex(with: document.text)
             let textLength = (document.text as NSString).length
-            let selectionLocation = min(document.selectionRange.location, textLength)
+            let selectionLocation = min(requestedSelection.location, textLength)
             let selectionLength = min(
-                document.selectionRange.length,
+                requestedSelection.length,
                 textLength - selectionLocation
             )
             textView.setSelectedRange(NSRange(
@@ -164,12 +221,44 @@ struct EditorTextView: NSViewRepresentable {
         var lastSynchronizedRevision: UInt
         private var wordWrap = true
         private var isActive = false
+        private var syntaxHighlightingEnabled: Bool
+        private var clearsDisabledSyntaxOnScroll = false
         private var lineNumbersVisible: Bool?
         private var lastLayoutWidth: CGFloat = -1
         private var lastRulerWidth: CGFloat = -1
         private var highlightWorkItem: DispatchWorkItem?
+        private let highlightQueue: OperationQueue = {
+            let queue = OperationQueue()
+            queue.name = "com.laceditor.syntax-highlighting"
+            queue.maxConcurrentOperationCount = 1
+            queue.qualityOfService = .userInitiated
+            return queue
+        }()
+        private var highlightOperation: BlockOperation?
+        private let syntaxHighlightContext = SyntaxHighlighter.IncrementalContext()
+        private var highlightGeneration: UInt = 0
+        private var contentRevision: UInt
+        private var highlightedRevision: UInt?
+        private var highlightedLanguage: EditorLanguage?
+        private var highlightedFontSize: CGFloat?
+        private var highlightedRange: NSRange?
         private var rulerRefreshWorkItem: DispatchWorkItem?
+        private var rulerResizeRefreshWorkItem: DispatchWorkItem?
+        private var rulerRefreshNeedsLayout = false
         private var selectionVisibilityWorkItem: DispatchWorkItem?
+        private var modelSyncWorkItem: DispatchWorkItem?
+        private var layoutPrefetchWorkItem: DispatchWorkItem?
+        private var listNormalizationWorkItem: DispatchWorkItem?
+        private let listNormalizationQueue: OperationQueue = {
+            let queue = OperationQueue()
+            queue.name = "com.laceditor.list-normalization"
+            queue.maxConcurrentOperationCount = 1
+            queue.qualityOfService = .userInitiated
+            return queue
+        }()
+        private var pendingListNormalizationLocation: Int?
+        private var lastViewportOriginY: CGFloat = 0
+        private let liveTextProviderID = UUID()
         private var pendingSelectionScrollOriginY: CGFloat?
         private var pendingOffscreenEditAnchor: Int?
         private var pendingOffscreenSelectionRange: NSRange?
@@ -180,11 +269,62 @@ struct EditorTextView: NSViewRepresentable {
             self.document = document
             currentLanguage = document.language
             lastSynchronizedRevision = document.textRevision
+            contentRevision = document.textRevision
             lineIndex = LogicalLineIndex(text: document.text)
+            syntaxHighlightingEnabled = document.isSyntaxHighlightingEnabled
+        }
+
+        var isSessionActive: Bool { isActive }
+
+        var estimatedMemoryCost: Int {
+            let utf16Bytes = (textView?.textStorage?.length ?? document.text.utf16.count) * 2
+            return utf16Bytes * 4
+        }
+
+        func prepareForEviction() {
+            flushModelText(reconcileDirtyState: true)
+            if let scrollView {
+                let contentHeight = max(
+                    1,
+                    (scrollView.documentView?.bounds.height ?? 0)
+                        - scrollView.contentView.bounds.height
+                )
+                document.scrollPositionRatio = min(
+                    1,
+                    max(0, scrollView.contentView.bounds.minY / contentHeight)
+                )
+            }
+            document.foldedRange = foldLayoutManager?.foldedRange
+        }
+
+        func restoreViewportState() {
+            guard let scrollView else { return }
+            let ratio = document.scrollPositionRatio
+            DispatchQueue.main.async { [weak scrollView] in
+                guard let scrollView, ratio > 0 else { return }
+                let contentHeight = max(
+                    0,
+                    (scrollView.documentView?.bounds.height ?? 0)
+                        - scrollView.contentView.bounds.height
+                )
+                scrollView.contentView.scroll(
+                    to: NSPoint(x: 0, y: contentHeight * ratio)
+                )
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
         }
 
         deinit {
+            modelSyncWorkItem?.cancel()
+            layoutPrefetchWorkItem?.cancel()
+            listNormalizationWorkItem?.cancel()
+            listNormalizationQueue.cancelAllOperations()
+            document.detachLiveTextProvider(id: liveTextProviderID)
+            highlightWorkItem?.cancel()
+            highlightOperation?.cancel()
+            highlightQueue.cancelAllOperations()
             rulerRefreshWorkItem?.cancel()
+            rulerResizeRefreshWorkItem?.cancel()
             selectionVisibilityWorkItem?.cancel()
             observerTokens.forEach(NotificationCenter.default.removeObserver)
         }
@@ -196,17 +336,18 @@ struct EditorTextView: NSViewRepresentable {
                 object: scrollView.contentView,
                 queue: .main
             ) { [weak self] _ in
-                guard let self else { return }
+                guard let self, isActive else { return }
                 resetHorizontalScrollIfNeeded()
                 refreshRulerForViewportChange()
                 scheduleHighlight()
+                scheduleDirectionalLayoutPrefetch()
             })
             observerTokens.append(NotificationCenter.default.addObserver(
                 forName: NSView.frameDidChangeNotification,
                 object: scrollView.contentView,
                 queue: .main
             ) { [weak self] _ in
-                guard let self else { return }
+                guard let self, isActive else { return }
                 updateLayout(wordWrap: wordWrap)
             })
             observerTokens.append(NotificationCenter.default.addObserver(
@@ -219,7 +360,7 @@ struct EditorTextView: NSViewRepresentable {
                       request.documentID == document.id,
                       let textView else { return }
                 clearFoldIfNeeded(toReveal: request.range)
-                let length = (textView.string as NSString).length
+                let length = textView.textStorage?.length ?? 0
                 let range = NSIntersectionRange(
                     request.range,
                     NSRange(location: 0, length: length)
@@ -268,13 +409,23 @@ struct EditorTextView: NSViewRepresentable {
             })
         }
 
+        func attachLiveTextProvider() {
+            document.attachLiveTextProvider(
+                id: liveTextProviderID,
+                provider: { [weak textView] in textView?.string },
+                acknowledgement: { [weak self] revision in
+                    self?.lastSynchronizedRevision = revision
+                }
+            )
+        }
+
         private func apply(
             _ request: EditorTextUpdateRequest,
             to textView: LacTextView
         ) {
             let fullRange = NSRange(
                 location: 0,
-                length: (textView.string as NSString).length
+                length: textView.textStorage?.length ?? 0
             )
             isApplyingAutomatedEdit = true
             defer { isApplyingAutomatedEdit = false }
@@ -295,6 +446,10 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         func updateLayout(wordWrap: Bool, force: Bool = false) {
+            guard isActive || force else {
+                self.wordWrap = wordWrap
+                return
+            }
             guard let scrollView, let textView, let textContainer = textView.textContainer else { return }
             let contentSize = scrollView.contentSize
             let availableWidth = max(1, contentSize.width)
@@ -345,14 +500,30 @@ struct EditorTextView: NSViewRepresentable {
             scheduleRulerRefreshAfterResize()
         }
 
+        func updatePerformanceFeatures() {
+            foldLayoutManager?.allowsNonContiguousLayout = document.isLargeFileMode
+            foldLayoutManager?.backgroundLayoutEnabled = !document.isLargeFileMode
+            let nextSyntaxEnabled = document.isSyntaxHighlightingEnabled
+            if syntaxHighlightingEnabled && !nextSyntaxEnabled {
+                clearsDisabledSyntaxOnScroll = true
+                cancelPendingHighlight()
+                clearSyntaxAttributesInVisibleRange()
+            } else if nextSyntaxEnabled {
+                clearsDisabledSyntaxOnScroll = false
+            }
+            syntaxHighlightingEnabled = nextSyntaxEnabled
+            if !document.isFoldingEnabled { clearFold() }
+        }
+
         private func scheduleRulerRefreshAfterResize() {
-            rulerRefreshWorkItem?.cancel()
+            rulerResizeRefreshWorkItem?.cancel()
             let workItem = DispatchWorkItem { [weak self] in
-                guard let ruler = self?.ruler else { return }
+                guard let self, let ruler else { return }
+                rulerResizeRefreshWorkItem = nil
                 ruler.invalidateHashMarks()
                 ruler.setNeedsDisplay(ruler.bounds)
             }
-            rulerRefreshWorkItem = workItem
+            rulerResizeRefreshWorkItem = workItem
             DispatchQueue.main.asyncAfter(
                 deadline: .now() + 0.12,
                 execute: workItem
@@ -366,6 +537,37 @@ struct EditorTextView: NSViewRepresentable {
             let y = scrollView.contentView.bounds.origin.y
             scrollView.contentView.scroll(to: NSPoint(x: 0, y: y))
             scrollView.reflectScrolledClipView(scrollView.contentView)
+        }
+
+        private func scheduleDirectionalLayoutPrefetch() {
+            layoutPrefetchWorkItem?.cancel()
+            guard document.isLargeFileMode, !wordWrap,
+                  let textView else { return }
+            let currentY = textView.visibleRect.minY
+            let direction: CGFloat = currentY >= lastViewportOriginY ? 1 : -1
+            lastViewportOriginY = currentY
+            let workItem = DispatchWorkItem { [weak self, weak textView] in
+                guard let self, let textView,
+                      let layoutManager = textView.layoutManager,
+                      let textContainer = textView.textContainer,
+                      document.isLargeFileMode,
+                      !wordWrap else { return }
+                layoutPrefetchWorkItem = nil
+                let visible = textView.visibleRect.offsetBy(
+                    dx: -textView.textContainerOrigin.x,
+                    dy: -textView.textContainerOrigin.y
+                )
+                let target = visible.offsetBy(
+                    dx: 0,
+                    dy: direction * visible.height
+                )
+                layoutManager.ensureLayout(
+                    forBoundingRect: target,
+                    in: textContainer
+                )
+            }
+            layoutPrefetchWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
         }
 
         func updateLineNumbersVisibility(_ isVisible: Bool) {
@@ -391,7 +593,19 @@ struct EditorTextView: NSViewRepresentable {
         func updateActivity(_ newValue: Bool) {
             guard isActive != newValue else { return }
             isActive = newValue
-            guard newValue else { return }
+            guard newValue else {
+                textView?.requestsFirstResponderWhenAttached = false
+                if let textView,
+                   let window = textView.window,
+                   window.firstResponder === textView {
+                    window.makeFirstResponder(nil)
+                }
+                cancelPendingHighlight()
+                return
+            }
+            textView?.requestsFirstResponderWhenAttached = true
+            updateLayout(wordWrap: wordWrap, force: true)
+            scheduleHighlight(delay: 0)
             DispatchQueue.main.async { [weak self] in
                 guard let self, isActive, let textView, let window = textView.window else {
                     return
@@ -402,19 +616,77 @@ struct EditorTextView: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             guard !isApplyingExternalUpdate, let textView else { return }
-            if lineIndex.textLength != (textView.string as NSString).length {
-                lineIndex.reset(with: textView.string)
+            if let text = textView.textStorage?.mutableString,
+               lineIndex.textLength != text.length {
+                lineIndex.reset(with: text)
             }
             restorePendingOffscreenEdit(in: textView)
-            document.text = textView.string
-            lastSynchronizedRevision = document.textRevision
-            document.refreshDirtyState()
+            document.noteLiveEdit(isEmpty: textView.textStorage?.length == 0)
+            NotificationCenter.default.post(
+                name: EditorCommandNotification.documentContentDidChange,
+                object: document.id
+            )
             document.statusMessage = nil
             clearFold()
             refreshRuler()
             updateCursor()
             scheduleSelectionVisibilitySync()
+            scheduleModelSync()
             scheduleHighlight()
+            if let location = pendingListNormalizationLocation {
+                pendingListNormalizationLocation = nil
+                scheduleOrderedListNormalization(around: location)
+            }
+        }
+
+        private func scheduleModelSync() {
+            modelSyncWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                modelSyncWorkItem = nil
+                flushModelText(reconcileDirtyState: true)
+            }
+            modelSyncWorkItem = workItem
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + 0.35,
+                execute: workItem
+            )
+        }
+
+        func flushModelText(reconcileDirtyState: Bool) {
+            if reconcileDirtyState {
+                modelSyncWorkItem?.cancel()
+                modelSyncWorkItem = nil
+            }
+            let needsSynchronization = document.hasPendingLiveEdits
+            let syncSignpostID = OSSignpostID(log: editorPerformanceLog)
+            if needsSynchronization {
+                os_signpost(
+                    .begin,
+                    log: editorPerformanceLog,
+                    name: "EditorModelSync",
+                    signpostID: syncSignpostID
+                )
+            }
+            if document.synchronizeLiveText() {
+                lastSynchronizedRevision = document.textRevision
+            }
+            if needsSynchronization {
+                os_signpost(
+                    .end,
+                    log: editorPerformanceLog,
+                    name: "EditorModelSync",
+                    signpostID: syncSignpostID
+                )
+            }
+            if reconcileDirtyState {
+                document.refreshDirtyState()
+                lastSynchronizedRevision = document.textRevision
+            }
+        }
+
+        func advanceContentRevision() {
+            contentRevision &+= 1
         }
 
         private func scheduleSelectionVisibilitySync() {
@@ -422,7 +694,7 @@ struct EditorTextView: NSViewRepresentable {
             let workItem = DispatchWorkItem { [weak self] in
                 guard let self, let textView else { return }
                 let selection = textView.selectedRange()
-                let text = textView.string as NSString
+                guard let text = textView.textStorage?.mutableString else { return }
                 if text.length > 0, let layoutManager = textView.layoutManager {
                     let anchor = min(selection.location, text.length - 1)
                     let lineRange = text.lineRange(
@@ -461,8 +733,8 @@ struct EditorTextView: NSViewRepresentable {
                 pendingOffscreenSelectionRange = nil
             }
 
-            guard let layoutManager = textView.layoutManager else { return }
-            let text = textView.string as NSString
+            guard let layoutManager = textView.layoutManager,
+                  let text = textView.textStorage?.mutableString else { return }
             // IME commits can temporarily move selectedRange to the document end.
             // The delegate's affected range remains the authoritative edit anchor.
             let location = min(affectedRange.location, text.length)
@@ -518,7 +790,7 @@ struct EditorTextView: NSViewRepresentable {
                 return
             }
 
-            let textLength = (textView.string as NSString).length
+            let textLength = textView.textStorage?.length ?? 0
             let location = min(expectedSelection.location, textLength)
             let selection = NSRange(
                 location: location,
@@ -549,7 +821,7 @@ struct EditorTextView: NSViewRepresentable {
         ) -> Bool {
             clearFold()
             let replacement = replacementString ?? ""
-            let nsText = textView.string as NSString
+            guard let nsText = textView.textStorage?.mutableString else { return false }
             let safeLocation = min(affectedCharRange.location, nsText.length)
             let safeRange = NSRange(
                 location: safeLocation,
@@ -558,6 +830,13 @@ struct EditorTextView: NSViewRepresentable {
                     nsText.length - safeLocation
                 )
             )
+            contentRevision &+= 1
+            syntaxHighlightContext.invalidate(after: safeRange.location)
+            if !isApplyingAutomatedEdit {
+                listNormalizationWorkItem?.cancel()
+                listNormalizationQueue.cancelAllOperations()
+                document.taskCoordinator.cancel(.listNormalization)
+            }
 
             if !isApplyingAutomatedEdit {
                 captureOffscreenSelectionPosition(
@@ -585,12 +864,12 @@ struct EditorTextView: NSViewRepresentable {
             }
 
             guard ListContinuationService.shouldNormalizeOrderedListEdit(
-                    in: textView.string,
+                    in: nsText,
                     range: safeRange,
                     replacement: replacement
                   ),
                   !ListContinuationService.isManualOrderedMarkerEdit(
-                    in: textView.string,
+                    in: nsText,
                     range: safeRange,
                     replacement: replacement
                   ) else {
@@ -602,10 +881,23 @@ struct EditorTextView: NSViewRepresentable {
                 return true
             }
 
-            let prospectiveText = NSMutableString(string: textView.string)
-            prospectiveText.replaceCharacters(in: safeRange, with: replacement)
             let intendedCaretLocation = safeRange.location
                 + (replacement as NSString).length
+            if ListContinuationService.orderedListExceedsBackgroundThreshold(
+                in: nsText,
+                aroundUTF16Location: safeRange.location
+            ) {
+                pendingListNormalizationLocation = intendedCaretLocation
+                lineIndex.applyEdit(
+                    range: safeRange,
+                    replacement: replacement,
+                    in: nsText
+                )
+                return true
+            }
+
+            let prospectiveText = NSMutableString(string: textView.string)
+            prospectiveText.replaceCharacters(in: safeRange, with: replacement)
             guard let normalization = ListContinuationService.normalizeOrderedList(
                 in: prospectiveText as String,
                 aroundUTF16Location: intendedCaretLocation
@@ -634,8 +926,68 @@ struct EditorTextView: NSViewRepresentable {
             return false
         }
 
+        private func scheduleOrderedListNormalization(around location: Int) {
+            listNormalizationWorkItem?.cancel()
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self, let textView else { return }
+                listNormalizationWorkItem = nil
+                let snapshot = textView.string
+                let revision = contentRevision
+                let taskGeneration = document.taskCoordinator.begin(.listNormalization)
+                let operation = BlockOperation()
+                operation.addExecutionBlock { [weak self, weak operation] in
+                    guard let self, let operation, !operation.isCancelled else { return }
+                    let result = ListContinuationService.normalizeOrderedList(
+                        in: snapshot,
+                        aroundUTF16Location: location
+                    )
+                    guard let result, !operation.isCancelled,
+                          document.taskCoordinator.isCurrent(
+                            taskGeneration,
+                            for: .listNormalization
+                          ) else { return }
+                    DispatchQueue.main.async { [weak self, weak operation] in
+                        guard let self, let operation, !operation.isCancelled,
+                              revision == contentRevision,
+                              document.taskCoordinator.isCurrent(
+                                taskGeneration,
+                                for: .listNormalization
+                              ),
+                              let edit = combinedEdit(from: snapshot, to: result.text) else { return }
+                        document.taskCoordinator.finish(
+                            .listNormalization,
+                            generation: taskGeneration
+                        )
+                        let selectionBeforeApply = textView.selectedRange()
+                        isApplyingAutomatedEdit = true
+                        textView.insertText(
+                            edit.replacement,
+                            replacementRange: edit.range
+                        )
+                        textView.setSelectedRange(NSRange(
+                            location: result.mappedLocation(
+                                for: selectionBeforeApply.location
+                            ),
+                            length: 0
+                        ))
+                        textView.undoManager?.setActionName("整理有序列表")
+                        isApplyingAutomatedEdit = false
+                    }
+                }
+                document.taskCoordinator.attach(
+                    operation,
+                    kind: .listNormalization,
+                    generation: taskGeneration
+                )
+                listNormalizationQueue.addOperation(operation)
+            }
+            listNormalizationWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: workItem)
+        }
+
         func textViewDidChangeSelection(_ notification: Notification) {
-            guard !isRestoringOffscreenEdit,
+            guard !isApplyingExternalUpdate,
+                  !isRestoringOffscreenEdit,
                   textView?.hasMarkedText() != true else { return }
             textView?.needsDisplay = true
             invalidateEntireRuler(displayImmediately: true)
@@ -656,8 +1008,21 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         func scheduleHighlight(delay: TimeInterval = 0.12) {
+            guard isActive, document.isSyntaxHighlightingEnabled else {
+                cancelPendingHighlight()
+                if clearsDisabledSyntaxOnScroll {
+                    clearSyntaxAttributesInVisibleRange()
+                }
+                return
+            }
             highlightWorkItem?.cancel()
-            let work = DispatchWorkItem { [weak self] in self?.applyHighlight(fontSize: self?.currentFontSize ?? 14) }
+            highlightGeneration &+= 1
+            let generation = highlightGeneration
+            let work = DispatchWorkItem { [weak self] in
+                guard let self,
+                      generation == highlightGeneration else { return }
+                beginHighlight(generation: generation)
+            }
             highlightWorkItem = work
             if delay <= 0 {
                 DispatchQueue.main.async(execute: work)
@@ -666,31 +1031,158 @@ struct EditorTextView: NSViewRepresentable {
             }
         }
 
-        func applyHighlight(fontSize: CGFloat) {
-            guard currentLanguage != .plainText,
+        private func beginHighlight(generation: UInt) {
+            guard isActive,
+                  generation == highlightGeneration,
                   let textView,
                   !textView.hasMarkedText(),
                   let storage = textView.textStorage else { return }
-            let selection = textView.selectedRange()
-            let highlightRange = storage.length > 500_000 ? visibleHighlightRange() : nil
-            SyntaxHighlighter.apply(
-                to: storage,
-                language: document.language,
-                baseFont: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
-                range: highlightRange
+            highlightWorkItem = nil
+
+            flushModelText(reconcileDirtyState: false)
+            let revision = contentRevision
+            let language = currentLanguage
+            let fontSize = currentFontSize
+            let fullRange = NSRange(location: 0, length: storage.length)
+            let targetRange = storage.length > 500_000
+                ? visibleHighlightRange() ?? fullRange
+                : fullRange
+            if highlightedRevision == revision,
+               highlightedLanguage == language,
+               highlightedFontSize == fontSize,
+               let highlightedRange,
+               NSLocationInRange(targetRange.location, highlightedRange),
+               NSMaxRange(targetRange) <= NSMaxRange(highlightedRange) {
+                return
+            }
+
+            let synchronizedSnapshot = document.text
+            let snapshot = (synchronizedSnapshot as NSString).length == storage.length
+                ? synchronizedSnapshot
+                : storage.string
+            highlightOperation?.cancel()
+            let operation = BlockOperation()
+            operation.addExecutionBlock { [weak self, weak operation] in
+                guard let operation, !operation.isCancelled else { return }
+                let tokenizeSignpostID = OSSignpostID(log: editorPerformanceLog)
+                os_signpost(
+                    .begin,
+                    log: editorPerformanceLog,
+                    name: "SyntaxTokenize",
+                    signpostID: tokenizeSignpostID
+                )
+                let tokens = SyntaxHighlighter.tokens(
+                    in: snapshot,
+                    language: language,
+                    range: targetRange,
+                    context: self?.syntaxHighlightContext,
+                    revision: revision,
+                    isCancelled: { operation.isCancelled }
+                )
+                os_signpost(
+                    .end,
+                    log: editorPerformanceLog,
+                    name: "SyntaxTokenize",
+                    signpostID: tokenizeSignpostID
+                )
+                guard !operation.isCancelled else { return }
+                DispatchQueue.main.async { [weak self, weak operation] in
+                    guard let operation, !operation.isCancelled else { return }
+                    self?.applyHighlight(
+                        tokens: tokens,
+                        range: targetRange,
+                        revision: revision,
+                        language: language,
+                        fontSize: fontSize,
+                        generation: generation
+                    )
+                }
+            }
+            highlightOperation = operation
+            highlightQueue.addOperation(operation)
+        }
+
+        private func applyHighlight(
+            tokens: [SyntaxHighlighter.Token],
+            range: NSRange,
+            revision: UInt,
+            language: EditorLanguage,
+            fontSize: CGFloat,
+            generation: UInt
+        ) {
+            guard isActive,
+                  generation == highlightGeneration,
+                  revision == contentRevision,
+                  language == currentLanguage,
+                  fontSize == currentFontSize,
+                  let textView,
+                  !textView.hasMarkedText(),
+                  let storage = textView.textStorage,
+                  NSMaxRange(range) <= storage.length else { return }
+            let applySignpostID = OSSignpostID(log: editorPerformanceLog)
+            os_signpost(
+                .begin,
+                log: editorPerformanceLog,
+                name: "SyntaxApply",
+                signpostID: applySignpostID
             )
-            textView.setSelectedRange(selection)
+            SyntaxHighlighter.apply(
+                tokens: tokens,
+                to: storage,
+                baseFont: NSFont.monospacedSystemFont(
+                    ofSize: fontSize,
+                    weight: .regular
+                ),
+                range: range
+            )
+            os_signpost(
+                .end,
+                log: editorPerformanceLog,
+                name: "SyntaxApply",
+                signpostID: applySignpostID
+            )
+            highlightedRevision = revision
+            highlightedLanguage = language
+            highlightedFontSize = fontSize
+            highlightedRange = range
+            highlightOperation = nil
             refreshRuler()
         }
 
+        private func cancelPendingHighlight() {
+            highlightWorkItem?.cancel()
+            highlightWorkItem = nil
+            highlightOperation?.cancel()
+            highlightOperation = nil
+            highlightGeneration &+= 1
+        }
+
+        private func clearSyntaxAttributesInVisibleRange() {
+            guard let storage = textView?.textStorage, storage.length > 0 else { return }
+            let range = storage.length > 500_000
+                ? visibleHighlightRange() ?? NSRange(location: 0, length: 0)
+                : NSRange(location: 0, length: storage.length)
+            guard range.length > 0 else { return }
+            SyntaxHighlighter.apply(
+                tokens: [],
+                to: storage,
+                baseFont: NSFont.monospacedSystemFont(
+                    ofSize: currentFontSize,
+                    weight: .regular
+                ),
+                range: range
+            )
+        }
+
         private func updateCursor() {
-            guard let textView else { return }
+            guard let textView,
+                  let text = textView.textStorage?.mutableString else { return }
             let selection = textView.selectedRange()
             document.selectionRange = selection
-            let location = min(selection.location, (textView.string as NSString).length)
+            let location = min(selection.location, text.length)
             let position = lineIndex.position(
                 at: location,
-                in: textView.string as NSString
+                in: text
             )
             document.cursorLine = position.line
             document.cursorColumn = position.column
@@ -732,21 +1224,27 @@ struct EditorTextView: NSViewRepresentable {
 
         private func refreshRuler() {
             guard textView != nil else { return }
-            ensureVisibleLayout()
-            invalidateEntireRuler()
-
-            // NSTextView finishes creating the extra line fragment after the
-            // change notification. Refresh once more on the next run loop.
-            DispatchQueue.main.async { [weak self] in
-                self?.invalidateEntireRuler()
-            }
+            scheduleRulerRefresh(ensureLayout: true)
         }
 
         private func refreshRulerForViewportChange() {
-            invalidateEntireRuler()
-            DispatchQueue.main.async { [weak self] in
-                self?.invalidateEntireRuler()
+            scheduleRulerRefresh(ensureLayout: false)
+        }
+
+        private func scheduleRulerRefresh(ensureLayout: Bool) {
+            rulerRefreshNeedsLayout = rulerRefreshNeedsLayout || ensureLayout
+            guard rulerRefreshWorkItem == nil else { return }
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                rulerRefreshWorkItem = nil
+                if rulerRefreshNeedsLayout {
+                    rulerRefreshNeedsLayout = false
+                    ensureVisibleLayout()
+                }
+                invalidateEntireRuler()
             }
+            rulerRefreshWorkItem = workItem
+            DispatchQueue.main.async(execute: workItem)
         }
 
         private func invalidateEntireRuler(displayImmediately: Bool = false) {
@@ -763,6 +1261,10 @@ struct EditorTextView: NSViewRepresentable {
             lineIndex.reset(with: text)
         }
 
+        func resetSyntaxHighlightContext() {
+            syntaxHighlightContext.reset()
+        }
+
         func lineNumber(at location: Int) -> Int {
             lineIndex.lineNumber(at: location)
         }
@@ -777,9 +1279,22 @@ struct EditorTextView: NSViewRepresentable {
                 dx: -textView.textContainerOrigin.x,
                 dy: -textView.textContainerOrigin.y
             )
+            let layoutSignpostID = OSSignpostID(log: editorPerformanceLog)
+            os_signpost(
+                .begin,
+                log: editorPerformanceLog,
+                name: "TextKitVisibleLayout",
+                signpostID: layoutSignpostID
+            )
             layoutManager.ensureLayout(
                 forBoundingRect: visibleRect,
                 in: textContainer
+            )
+            os_signpost(
+                .end,
+                log: editorPerformanceLog,
+                name: "TextKitVisibleLayout",
+                signpostID: layoutSignpostID
             )
         }
 
@@ -799,17 +1314,18 @@ struct EditorTextView: NSViewRepresentable {
                 forGlyphRange: glyphRange,
                 actualGlyphRange: nil
             )
-            let padding = 4_000
+            let padding = 16_000
             let start = max(0, characterRange.location - padding)
             let end = min(
-                (textView.string as NSString).length,
+                textView.textStorage?.length ?? 0,
                 NSMaxRange(characterRange) + padding
             )
             return NSRange(location: start, length: max(0, end - start))
         }
 
         private func toggleFold() {
-            guard let textView, textView.window?.firstResponder === textView,
+            guard document.isFoldingEnabled,
+                  let textView, textView.window?.firstResponder === textView,
                   let foldLayoutManager else { return }
             if foldLayoutManager.foldedRange != nil {
                 clearFold()
@@ -845,5 +1361,162 @@ struct EditorTextView: NSViewRepresentable {
             ruler?.invalidateHashMarks()
             ruler?.needsDisplay = true
         }
+    }
+}
+
+final class EditorSessionStore: ObservableObject {
+    private final class Entry {
+        let coordinator: EditorTextView.Coordinator
+        var scrollView: NSScrollView?
+        var accessOrder: UInt
+
+        init(
+            coordinator: EditorTextView.Coordinator,
+            accessOrder: UInt
+        ) {
+            self.coordinator = coordinator
+            self.accessOrder = accessOrder
+        }
+    }
+
+    private let limit: Int
+    private let inactiveMemoryBudget: Int
+    private let maximumCacheableSessionCost: Int
+    private var entries: [UUID: Entry] = [:]
+    private var accessOrder: UInt = 0
+    private var memoryPressureSource: DispatchSourceMemoryPressure?
+
+    init(
+        limit: Int,
+        inactiveMemoryBudget: Int,
+        maximumCacheableSessionCost: Int
+    ) {
+        self.limit = max(1, limit)
+        self.inactiveMemoryBudget = max(0, inactiveMemoryBudget)
+        self.maximumCacheableSessionCost = max(0, maximumCacheableSessionCost)
+        let source = DispatchSource.makeMemoryPressureSource(
+            eventMask: [.warning, .critical],
+            queue: .main
+        )
+        source.setEventHandler { [weak self, weak source] in
+            guard let self, let source else { return }
+            handleMemoryPressure(source.data)
+        }
+        source.resume()
+        memoryPressureSource = source
+    }
+
+    convenience init(limit: Int) {
+        self.init(
+            limit: limit,
+            inactiveMemoryBudget: 64 * 1_024 * 1_024,
+            maximumCacheableSessionCost: 24 * 1_024 * 1_024
+        )
+    }
+
+    deinit {
+        memoryPressureSource?.cancel()
+    }
+
+    func coordinator(for document: EditorDocument) -> EditorTextView.Coordinator {
+        if let entry = entries[document.id] {
+            touch(entry)
+            return entry.coordinator
+        }
+        let coordinator = EditorTextView.Coordinator(document: document)
+        accessOrder &+= 1
+        entries[document.id] = Entry(
+            coordinator: coordinator,
+            accessOrder: accessOrder
+        )
+        trimIfNeeded()
+        return coordinator
+    }
+
+    func cachedView(for documentID: UUID) -> NSScrollView? {
+        guard let entry = entries[documentID],
+              let scrollView = entry.scrollView else { return nil }
+        touch(entry)
+        scrollView.removeFromSuperview()
+        return scrollView
+    }
+
+    func store(
+        _ scrollView: NSScrollView,
+        coordinator: EditorTextView.Coordinator,
+        for documentID: UUID
+    ) {
+        let entry: Entry
+        if let existing = entries[documentID] {
+            entry = existing
+        } else {
+            accessOrder &+= 1
+            entry = Entry(coordinator: coordinator, accessOrder: accessOrder)
+            entries[documentID] = entry
+        }
+        entry.scrollView = scrollView
+        touch(entry)
+        trimIfNeeded()
+    }
+
+    func retainDocuments(_ documentIDs: Set<UUID>) {
+        entries = entries.filter { documentIDs.contains($0.key) }
+    }
+
+    private func touch(_ entry: Entry) {
+        accessOrder &+= 1
+        entry.accessOrder = accessOrder
+    }
+
+    private func trimIfNeeded() {
+        while inactiveEntries.count > limit
+                || inactiveMemoryCost > inactiveMemoryBudget
+                || inactiveEntries.contains(where: {
+                    $0.value.coordinator.estimatedMemoryCost > maximumCacheableSessionCost
+                }) {
+            let oversized = inactiveEntries
+                .filter { $0.value.coordinator.estimatedMemoryCost > maximumCacheableSessionCost }
+                .min { $0.value.accessOrder < $1.value.accessOrder }
+            guard let victim = oversized ?? inactiveEntries.min(by: {
+                $0.value.accessOrder < $1.value.accessOrder
+            }) else { break }
+            evict(victim.key)
+        }
+    }
+
+    private var inactiveEntries: [(key: UUID, value: Entry)] {
+        entries.filter { !$0.value.coordinator.isSessionActive }
+    }
+
+    private var inactiveMemoryCost: Int {
+        inactiveEntries.reduce(0) { $0 + $1.value.coordinator.estimatedMemoryCost }
+    }
+
+    private func handleMemoryPressure(_ event: DispatchSource.MemoryPressureEvent) {
+        let inactive = inactiveEntries.sorted {
+            $0.value.accessOrder < $1.value.accessOrder
+        }
+        if event.contains(.critical) {
+            inactive.forEach { evict($0.key) }
+        } else if event.contains(.warning) {
+            inactive.filter {
+                $0.value.coordinator.estimatedMemoryCost > maximumCacheableSessionCost / 2
+            }.forEach { evict($0.key) }
+        }
+    }
+
+    private func evict(_ documentID: UUID) {
+        guard let entry = entries[documentID], !entry.coordinator.isSessionActive else { return }
+        entry.coordinator.prepareForEviction()
+        entry.coordinator.document.taskCoordinator.cancel(.search)
+        entry.coordinator.document.taskCoordinator.cancel(.replace)
+        entry.coordinator.document.taskCoordinator.cancel(.json)
+        entry.coordinator.document.taskCoordinator.cancel(.preview)
+        os_signpost(
+            .event,
+            log: editorPerformanceLog,
+            name: "MemoryEviction"
+        )
+        entries.removeValue(forKey: documentID)
     }
 }

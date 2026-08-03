@@ -159,14 +159,44 @@ struct LacEditorCommands: Commands {
                 .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(appState == nil)
             Button {
-                appState?.isWordWrapEnabled.toggle()
+                appState?.toggleWordWrap()
             } label: {
                 Label(
-                    appState?.isWordWrapEnabled == true ? "关闭自动换行" : "开启自动换行",
+                    currentWordWrapEnabled ? "关闭自动换行" : "开启自动换行",
                     systemImage: "text.justify.left"
                 )
             }
             .disabled(appState == nil)
+            Menu {
+                largeFileFeatureItem(
+                    "自动换行",
+                    feature: .wordWrap,
+                    enabled: currentWordWrapEnabled
+                )
+                largeFileFeatureItem(
+                    "Markdown 预览",
+                    feature: .preview,
+                    enabled: appState?.selectedDocument?.isPreviewEffectivelyEnabled == true
+                )
+                largeFileFeatureItem(
+                    "语法高亮",
+                    feature: .syntaxHighlighting,
+                    enabled: appState?.selectedDocument?.isSyntaxHighlightingEnabled == true
+                )
+                largeFileFeatureItem(
+                    "代码折叠",
+                    feature: .folding,
+                    enabled: appState?.selectedDocument?.isFoldingEnabled == true
+                )
+                largeFileFeatureItem(
+                    "实时字数统计",
+                    feature: .wordCount,
+                    enabled: appState?.selectedDocument?.isWordCountEnabled == true
+                )
+            } label: {
+                Label("大文件模式", systemImage: "gauge.with.dots.needle.33percent")
+            }
+            .disabled(appState?.selectedDocument?.isLargeFileMode != true)
             Button {
                 appState?.isLineNumbersVisible.toggle()
             } label: {
@@ -281,6 +311,23 @@ struct LacEditorCommands: Commands {
                 Label("折叠/展开当前区块", systemImage: "chevron.up.chevron.down")
             }
             .disabled(appState == nil)
+        }
+    }
+
+    private var currentWordWrapEnabled: Bool {
+        guard let appState, let document = appState.selectedDocument else { return false }
+        return document.effectiveWordWrap(globalDefault: appState.isWordWrapEnabled)
+    }
+
+    private func largeFileFeatureItem(
+        _ title: String,
+        feature: DocumentManagedFeature,
+        enabled: Bool
+    ) -> some View {
+        Button {
+            appState?.toggleLargeFileFeature(feature)
+        } label: {
+            Label(title, systemImage: enabled ? "checkmark" : "minus")
         }
     }
 

@@ -36,6 +36,14 @@ extension NSColor {
 final class LacTextView: NSTextView {
     var currentLineColor: NSColor = .lacCurrentLineBackground
     var selectionTrackingHandler: (() -> Void)?
+    var requestsFirstResponderWhenAttached = false
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard requestsFirstResponderWhenAttached,
+              let window else { return }
+        window.makeFirstResponder(self)
+    }
 
     override func setSelectedRange(
         _ charRange: NSRange,
@@ -59,7 +67,7 @@ final class LacTextView: NSTextView {
             layoutManager.invalidateDisplay(
                 forCharacterRange: NSRange(
                     location: 0,
-                    length: (string as NSString).length
+                    length: textStorage?.length ?? 0
                 )
             )
         }
@@ -67,15 +75,17 @@ final class LacTextView: NSTextView {
 
     override func drawBackground(in rect: NSRect) {
         super.drawBackground(in: rect)
-        guard let layoutManager, textContainer != nil else { return }
-        let location = min(selectedRange().location, (string as NSString).length)
-        let lineRange = (string as NSString).lineRange(for: NSRange(location: location, length: 0))
+        guard let layoutManager,
+              textContainer != nil,
+              let text = textStorage?.mutableString else { return }
+        let location = min(selectedRange().location, text.length)
+        let lineRange = text.lineRange(for: NSRange(location: location, length: 0))
         let glyphRange = layoutManager.glyphRange(
             forCharacterRange: lineRange,
             actualCharacterRange: nil
         )
         var lineRects: [NSRect] = []
-        if glyphRange.length == 0, location == (string as NSString).length {
+        if glyphRange.length == 0, location == text.length {
             var lineRect = layoutManager.extraLineFragmentRect
             if lineRect.isEmpty {
                 lineRect = NSRect(
@@ -110,7 +120,10 @@ final class LacTextView: NSTextView {
     }
 
     override func insertNewline(_ sender: Any?) {
-        let nsString = string as NSString
+        guard let nsString = textStorage?.mutableString else {
+            super.insertNewline(sender)
+            return
+        }
         let selection = selectedRange()
         let lineRange = nsString.lineRange(for: NSRange(location: selection.location, length: 0))
         let linePrefix = nsString.substring(with: NSRange(

@@ -23,7 +23,10 @@ final class LogicalLineIndex {
     }
 
     func reset(with text: String) {
-        let value = text as NSString
+        reset(with: text as NSString)
+    }
+
+    func reset(with value: NSString) {
         textLength = value.length
         lineStarts = [0]
         guard value.length > 0 else { return }

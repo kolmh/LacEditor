@@ -5,8 +5,11 @@ struct MainWindowView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
     @State private var isDropTargeted = false
-    @State private var loadedDocumentIDs: [UUID] = []
-    private let editorCacheLimit = 8
+    @StateObject private var editorSessions = EditorSessionStore(
+        limit: 3,
+        inactiveMemoryBudget: 64 * 1_024 * 1_024,
+        maximumCacheableSessionCost: 24 * 1_024 * 1_024
+    )
 
     var body: some View {
         ZStack(alignment: .leading) {
@@ -59,19 +62,8 @@ struct MainWindowView: View {
             }
             return accepted
         }
-        .onAppear {
-            if let selectedID = appState.selectedDocumentID {
-                markEditorLoaded(selectedID)
-            }
-        }
-        .onChange(of: appState.selectedDocumentID) { _, selectedID in
-            if let selectedID {
-                markEditorLoaded(selectedID)
-            }
-        }
         .onChange(of: appState.documents.map(\.id)) { _, documentIDs in
-            let liveIDs = Set(documentIDs)
-            loadedDocumentIDs.removeAll { !liveIDs.contains($0) }
+            editorSessions.retainDocuments(Set(documentIDs))
         }
     }
 
@@ -89,23 +81,18 @@ struct MainWindowView: View {
                 )
             }
             if let selectedDocument = appState.selectedDocument {
-                ZStack {
-                    ForEach(loadedDocuments) { document in
-                        DocumentEditorPane(
-                            document: document,
-                            isActive: document.id == selectedDocument.id,
-                            fontSize: appState.editorFontSize,
-                            wordWrap: appState.isWordWrapEnabled,
-                            showsLineNumbers: appState.isLineNumbersVisible,
-                            editorTopInset: showsTabBar ? 6 : 0,
-                            darkMode: colorScheme == .dark
-                        )
-                        .opacity(document.id == selectedDocument.id ? 1 : 0)
-                        .allowsHitTesting(document.id == selectedDocument.id)
-                        .accessibilityHidden(document.id != selectedDocument.id)
-                        .zIndex(document.id == selectedDocument.id ? 1 : 0)
-                    }
-                }
+                DocumentEditorPane(
+                    document: selectedDocument,
+                    sessionStore: editorSessions,
+                    fontSize: appState.editorFontSize,
+                    wordWrap: selectedDocument.effectiveWordWrap(
+                        globalDefault: appState.isWordWrapEnabled
+                    ),
+                    showsLineNumbers: appState.isLineNumbersVisible,
+                    editorTopInset: showsTabBar ? 6 : 0,
+                    darkMode: colorScheme == .dark
+                )
+                .id(selectedDocument.id)
                 .animation(nil, value: appState.selectedDocumentID)
 
                 if appState.isStatusBarVisible {
@@ -123,26 +110,12 @@ struct MainWindowView: View {
         appState.documents.count > 1
     }
 
-    private var loadedDocuments: [EditorDocument] {
-        appState.documents.filter {
-            loadedDocumentIDs.contains($0.id) || $0.id == appState.selectedDocumentID
-        }
-    }
-
-    private func markEditorLoaded(_ documentID: UUID) {
-        loadedDocumentIDs.removeAll { $0 == documentID }
-        loadedDocumentIDs.append(documentID)
-        if loadedDocumentIDs.count > editorCacheLimit {
-            loadedDocumentIDs.removeFirst(
-                loadedDocumentIDs.count - editorCacheLimit
-            )
-        }
-    }
 }
 
 private struct DocumentEditorPane: View {
+    @EnvironmentObject private var appState: AppState
     @ObservedObject var document: EditorDocument
-    let isActive: Bool
+    let sessionStore: EditorSessionStore
     let fontSize: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
@@ -150,20 +123,33 @@ private struct DocumentEditorPane: View {
     let darkMode: Bool
 
     var body: some View {
-        Group {
-            if document.language == .markdown && document.isPreviewVisible {
+        ZStack {
+            if document.isPreviewEffectivelyEnabled {
                 HSplitView {
                     editor
                         .frame(minWidth: 300)
 
                     MarkdownPreview(
                         markdown: document.text,
-                        darkMode: darkMode
+                        darkMode: darkMode,
+                        document: document
                     )
                     .frame(minWidth: 280)
                 }
             } else {
                 editor
+            }
+            if document.ioState == .opening {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("正在打开“\(document.displayName)”")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                    Button("取消") {
+                        appState.cancelOpening(document)
+                    }
+                }
             }
         }
     }
@@ -171,11 +157,12 @@ private struct DocumentEditorPane: View {
     private var editor: some View {
         EditorTextView(
             document: document,
+            sessionStore: sessionStore,
             fontSize: fontSize,
             wordWrap: wordWrap,
             showsLineNumbers: showsLineNumbers,
             topInset: editorTopInset,
-            isActive: isActive
+            isActive: true
         )
     }
 }

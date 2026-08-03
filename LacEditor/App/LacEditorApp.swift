@@ -39,7 +39,7 @@ struct LacEditorApp: App {
                 windowManager: windowManager
             )
         }
-        .defaultSize(width: 540, height: 340)
+        .defaultSize(width: 540, height: 410)
         .windowResizability(.contentSize)
     }
 }
@@ -146,6 +146,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let manager = Self.sharedManager else { return .terminateNow }
+        if manager.hasPendingSaves {
+            manager.finishTerminationAfterPendingSaves { shouldTerminate in
+                sender.reply(toApplicationShouldTerminate: shouldTerminate)
+            }
+            return .terminateLater
+        }
         return manager.confirmClosingAllWindows() ? .terminateNow : .terminateCancel
     }
 }
@@ -286,6 +292,8 @@ struct WindowCloseCoordinator: NSViewRepresentable {
         let windowID: UUID
         weak var previousDelegate: NSWindowDelegate?
         private var chromeWorkItem: DispatchWorkItem?
+        private var isWaitingForSave = false
+        private var isCloseApproved = false
 
         init(appState: AppState, windowManager: WindowManager, windowID: UUID) {
             self.appState = appState
@@ -313,8 +321,21 @@ struct WindowCloseCoordinator: NSViewRepresentable {
         }
 
         func windowShouldClose(_ sender: NSWindow) -> Bool {
-            if windowManager.terminationApproved {
+            if windowManager.terminationApproved || isCloseApproved {
                 return true
+            }
+            if appState.hasPendingSave {
+                guard !isWaitingForSave else { return false }
+                isWaitingForSave = true
+                appState.waitForPendingSaves { [weak self, weak sender] in
+                    guard let self, let sender else { return }
+                    isWaitingForSave = false
+                    if appState.confirmClosingAllDocuments() {
+                        isCloseApproved = true
+                        sender.performClose(nil)
+                    }
+                }
+                return false
             }
             return appState.confirmClosingAllDocuments()
         }

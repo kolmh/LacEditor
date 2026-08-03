@@ -41,6 +41,13 @@ struct FileServiceVerification {
         let largeDecoded = try service.read(largeURL)
         require(largeDecoded.text == largeSample, "4 MiB UTF-8 round trip")
         require(largeDecoded.encoding == .utf8, "4 MiB encoding value")
+        switch try FileService.prepareRead(largeURL) {
+        case let .decoded(prepared):
+            require(prepared.text == largeSample, "background UTF-8 preparation")
+            require(prepared.encodingName == "UTF-8", "background UTF-8 encoding label")
+        case .needsEncoding:
+            fatalError("File verification failed: UTF-8 file requested encoding selection")
+        }
 
         let original = root.appendingPathComponent("rename-source.txt")
         try service.write("重命名", to: original)
@@ -96,7 +103,7 @@ struct FileServiceVerification {
 
         print(
             "File service verification passed "
-                + "(\(FileService.supportedExtensions.count) formats + 4 MiB round trip)"
+                + "(\(FileService.supportedExtensions.count) formats + 4 MiB round trip/preparation)"
         )
     }
 }

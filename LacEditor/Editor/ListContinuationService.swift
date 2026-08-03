@@ -56,8 +56,19 @@ enum ListContinuationService {
         range: NSRange,
         replacement: String
     ) -> Bool {
+        isManualOrderedMarkerEdit(
+            in: text as NSString,
+            range: range,
+            replacement: replacement
+        )
+    }
+
+    static func isManualOrderedMarkerEdit(
+        in nsText: NSString,
+        range: NSRange,
+        replacement: String
+    ) -> Bool {
         guard !replacement.contains("\n") else { return false }
-        let nsText = text as NSString
         let safeRange = boundedRange(range, textLength: nsText.length)
         guard !nsText.substring(with: safeRange).contains("\n") else {
             return false
@@ -83,7 +94,18 @@ enum ListContinuationService {
         range: NSRange,
         replacement: String
     ) -> Bool {
-        let nsText = text as NSString
+        shouldNormalizeOrderedListEdit(
+            in: text as NSString,
+            range: range,
+            replacement: replacement
+        )
+    }
+
+    static func shouldNormalizeOrderedListEdit(
+        in nsText: NSString,
+        range: NSRange,
+        replacement: String
+    ) -> Bool {
         let safeRange = boundedRange(range, textLength: nsText.length)
         let removedText = nsText.substring(with: safeRange)
         guard replacement.contains("\n") || removedText.contains("\n") else {
@@ -111,66 +133,62 @@ enum ListContinuationService {
         in text: String,
         aroundUTF16Location location: Int
     ) -> OrderedListNormalization? {
-        let lines = text.components(separatedBy: "\n")
-        var lineStarts: [Int] = []
-        var offset = 0
-        for (index, line) in lines.enumerated() {
-            lineStarts.append(offset)
-            offset += (line as NSString).length
-            if index + 1 < lines.count {
-                offset += 1
-            }
-        }
-
-        let boundedLocation = min(max(location, 0), (text as NSString).length)
-        let currentLine = max(
-            0,
-            min(
-                lineStarts.lastIndex(where: { $0 <= boundedLocation }) ?? 0,
-                lines.count - 1
-            )
+        let nsText = text as NSString
+        guard nsText.length > 0 else { return nil }
+        let boundedLocation = min(max(location, 0), nsText.length)
+        let anchorLocation = min(boundedLocation, max(0, nsText.length - 1))
+        let anchorRange = nsText.lineRange(
+            for: NSRange(location: anchorLocation, length: 0)
         )
-        let items = lines.enumerated().compactMap { index, line in
-            orderedItem(in: line, lineStart: lineStarts[index], lineIndex: index)
-        }
-        guard !items.isEmpty else { return nil }
+        let nearbyRanges = [
+            anchorRange,
+            nextLineRange(after: anchorRange, in: nsText),
+            previousLineRange(before: anchorRange, in: nsText)
+        ].compactMap { $0 }
+        guard let candidate = nearbyRanges.compactMap({ range in
+            orderedItem(in: nsText, lineRange: range)
+        }).first else { return nil }
 
-        let candidate = items.first(where: { $0.lineIndex == currentLine })
-            ?? items.first(where: { $0.lineIndex == currentLine + 1 })
-            ?? items.last(where: { $0.lineIndex < currentLine })
-        guard let candidate else { return nil }
-
-        let candidateIndex = items.firstIndex(where: {
-            $0.lineIndex == candidate.lineIndex
-                && $0.numberRange.location == candidate.numberRange.location
-        }) ?? 0
-
-        var firstItemIndex = candidateIndex
-        while firstItemIndex > 0 {
-            let previous = items[firstItemIndex - 1]
-            let current = items[firstItemIndex]
-            guard belongsToSameSequence(
-                previous,
-                current,
-                lines: lines
-            ) else { break }
-            firstItemIndex -= 1
-        }
-
-        var lastItemIndex = candidateIndex
-        while lastItemIndex + 1 < items.count {
-            let current = items[lastItemIndex]
-            let next = items[lastItemIndex + 1]
-            guard belongsToSameSequence(
-                current,
-                next,
-                lines: lines
-            ) else { break }
-            lastItemIndex += 1
+        var before: [OrderedItem] = []
+        var range = previousLineRange(
+            before: nsText.lineRange(for: NSRange(
+                location: candidate.numberRange.location,
+                length: 0
+            )),
+            in: nsText
+        )
+        while let currentRange = range {
+            let scan = scanLine(
+                currentRange,
+                in: nsText,
+                matching: candidate
+            )
+            if let item = scan.item { before.append(item) }
+            if scan.stopsSequence { break }
+            range = previousLineRange(before: currentRange, in: nsText)
         }
 
-        guard lastItemIndex > firstItemIndex else { return nil }
-        let sequence = Array(items[firstItemIndex...lastItemIndex])
+        var after: [OrderedItem] = []
+        range = nextLineRange(
+            after: nsText.lineRange(for: NSRange(
+                location: candidate.numberRange.location,
+                length: 0
+            )),
+            in: nsText
+        )
+        while let currentRange = range {
+            let scan = scanLine(
+                currentRange,
+                in: nsText,
+                matching: candidate
+            )
+            if let item = scan.item { after.append(item) }
+            if scan.stopsSequence { break }
+            range = nextLineRange(after: currentRange, in: nsText)
+        }
+
+        let sequence = Array(before.reversed()) + [candidate] + after
+        guard sequence.count > 1 else { return nil }
         let startingNumber = sequence[0].number
         let edits = sequence.enumerated().compactMap { index, item -> OrderedListEdit? in
             let expectedNumber = startingNumber + index
@@ -187,6 +205,110 @@ enum ListContinuationService {
             mutableText.replaceCharacters(in: edit.range, with: edit.replacement)
         }
         return OrderedListNormalization(text: mutableText as String, edits: edits)
+    }
+
+    static func orderedListExceedsBackgroundThreshold(
+        in text: NSString,
+        aroundUTF16Location location: Int,
+        threshold: Int = 500
+    ) -> Bool {
+        guard text.length > 0, threshold > 0 else { return false }
+        let anchor = min(max(location, 0), text.length - 1)
+        let anchorRange = text.lineRange(for: NSRange(location: anchor, length: 0))
+        let nearbyRanges = [
+            anchorRange,
+            nextLineRange(after: anchorRange, in: text),
+            previousLineRange(before: anchorRange, in: text)
+        ].compactMap { $0 }
+        guard let candidate = nearbyRanges.compactMap({ range in
+            orderedItem(in: text, lineRange: range)
+        }).first else { return false }
+
+        var count = 1
+        var range = previousLineRange(
+            before: text.lineRange(for: NSRange(
+                location: candidate.numberRange.location,
+                length: 0
+            )),
+            in: text
+        )
+        while let currentRange = range {
+            let scan = scanLine(currentRange, in: text, matching: candidate)
+            if scan.item != nil {
+                count += 1
+                if count > threshold { return true }
+            }
+            if scan.stopsSequence { break }
+            range = previousLineRange(before: currentRange, in: text)
+        }
+        range = nextLineRange(
+            after: text.lineRange(for: NSRange(
+                location: candidate.numberRange.location,
+                length: 0
+            )),
+            in: text
+        )
+        while let currentRange = range {
+            let scan = scanLine(currentRange, in: text, matching: candidate)
+            if scan.item != nil {
+                count += 1
+                if count > threshold { return true }
+            }
+            if scan.stopsSequence { break }
+            range = nextLineRange(after: currentRange, in: text)
+        }
+        return false
+    }
+
+    private static func orderedItem(
+        in text: NSString,
+        lineRange: NSRange
+    ) -> OrderedItem? {
+        let contentRange = text.lineRange(for: lineRange)
+        let line = text.substring(with: contentRange)
+            .trimmingCharacters(in: .newlines)
+        return orderedItem(in: line, lineStart: contentRange.location)
+    }
+
+    private static func scanLine(
+        _ lineRange: NSRange,
+        in text: NSString,
+        matching candidate: OrderedItem
+    ) -> (item: OrderedItem?, stopsSequence: Bool) {
+        let rawLine = text.substring(with: lineRange)
+            .trimmingCharacters(in: .newlines)
+        if rawLine.trimmingCharacters(in: .whitespaces).isEmpty {
+            return (nil, false)
+        }
+        if let item = orderedItem(in: rawLine, lineStart: lineRange.location) {
+            if item.indentWidth == candidate.indentWidth,
+               item.delimiter == candidate.delimiter {
+                return (item, false)
+            }
+            return (nil, item.indentWidth <= candidate.indentWidth)
+        }
+        let indentation = rawLine.prefix { $0 == " " || $0 == "\t" }
+        let width = indentation.reduce(into: 0) { total, character in
+            total += character == "\t" ? 4 : 1
+        }
+        return (nil, width <= candidate.indentWidth)
+    }
+
+    private static func previousLineRange(
+        before lineRange: NSRange,
+        in text: NSString
+    ) -> NSRange? {
+        guard lineRange.location > 0 else { return nil }
+        return text.lineRange(for: NSRange(location: lineRange.location - 1, length: 0))
+    }
+
+    private static func nextLineRange(
+        after lineRange: NSRange,
+        in text: NSString
+    ) -> NSRange? {
+        let nextLocation = NSMaxRange(lineRange)
+        guard nextLocation < text.length else { return nil }
+        return text.lineRange(for: NSRange(location: nextLocation, length: 0))
     }
 
     private struct OrderedItem {
@@ -231,30 +353,6 @@ enum ListContinuationService {
                 length: numberRangeInLine.length
             )
         )
-    }
-
-    private static func belongsToSameSequence(
-        _ first: OrderedItem,
-        _ second: OrderedItem,
-        lines: [String]
-    ) -> Bool {
-        guard first.indentWidth == second.indentWidth,
-              first.delimiter == second.delimiter,
-              first.lineIndex < second.lineIndex else {
-            return false
-        }
-
-        guard second.lineIndex - first.lineIndex > 1 else { return true }
-        return lines[(first.lineIndex + 1)..<second.lineIndex].allSatisfy { line in
-            if line.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return true
-            }
-            let indentation = line.prefix { $0 == " " || $0 == "\t" }
-            let width = indentation.reduce(into: 0) { total, character in
-                total += character == "\t" ? 4 : 1
-            }
-            return width > first.indentWidth
-        }
     }
 
     private static func boundedRange(

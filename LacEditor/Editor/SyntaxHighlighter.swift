@@ -25,6 +25,96 @@ enum SyntaxHighlighter {
         let kind: TokenKind
     }
 
+    final class IncrementalContext {
+        private let lock = NSLock()
+        private var language: EditorLanguage?
+        private var revision: UInt?
+        private var checkpoints = [LexicalCheckpoint(
+            location: 0,
+            state: .normal
+        )]
+        private var generation: UInt = 0
+        private var acceptsRevisionChange = false
+
+        func reset() {
+            lock.lock()
+            resetLocked()
+            lock.unlock()
+        }
+
+        func invalidate(after location: Int) {
+            lock.lock()
+            generation &+= 1
+            checkpoints.removeAll { $0.location > max(0, location) }
+            if checkpoints.isEmpty {
+                checkpoints = [LexicalCheckpoint(location: 0, state: .normal)]
+            }
+            acceptsRevisionChange = true
+            lock.unlock()
+        }
+
+        fileprivate func preparation(
+            language newLanguage: EditorLanguage,
+            revision newRevision: UInt,
+            targetLocation: Int
+        ) -> LexicalPreparation {
+            lock.lock()
+            defer { lock.unlock() }
+            if language != newLanguage {
+                resetLocked()
+                language = newLanguage
+                revision = newRevision
+            } else if revision != newRevision {
+                if acceptsRevisionChange {
+                    revision = newRevision
+                    acceptsRevisionChange = false
+                } else {
+                    resetLocked()
+                    language = newLanguage
+                    revision = newRevision
+                }
+            }
+            let checkpoint = checkpoints.last(where: {
+                $0.location <= targetLocation
+            }) ?? LexicalCheckpoint(location: 0, state: .normal)
+            return LexicalPreparation(
+                checkpoint: checkpoint,
+                generation: generation
+            )
+        }
+
+        fileprivate func commit(
+            _ newCheckpoints: [LexicalCheckpoint],
+            language expectedLanguage: EditorLanguage,
+            revision expectedRevision: UInt,
+            generation expectedGeneration: UInt
+        ) {
+            guard !newCheckpoints.isEmpty else { return }
+            lock.lock()
+            defer { lock.unlock() }
+            guard language == expectedLanguage,
+                  revision == expectedRevision,
+                  generation == expectedGeneration else { return }
+            var byLocation = Dictionary(
+                uniqueKeysWithValues: checkpoints.map { ($0.location, $0) }
+            )
+            for checkpoint in newCheckpoints {
+                byLocation[checkpoint.location] = checkpoint
+            }
+            checkpoints = byLocation.values.sorted {
+                $0.location < $1.location
+            }
+        }
+
+        private func resetLocked() {
+            generation &+= 1
+            language = nil
+            revision = nil
+            checkpoints = [LexicalCheckpoint(location: 0, state: .normal)]
+            acceptsRevisionChange = false
+        }
+    }
+
     private struct RuleDefinition {
         let pattern: String
         let kind: TokenKind
@@ -53,6 +143,28 @@ enum SyntaxHighlighter {
         var supportsJavaScriptRegexLiterals = false
     }
 
+    fileprivate enum LexicalState: Equatable {
+        case normal
+        case blockComment
+        case string(Int)
+    }
+
+    fileprivate struct LexicalCheckpoint {
+        let location: Int
+        let state: LexicalState
+    }
+
+    fileprivate struct LexicalPreparation {
+        let checkpoint: LexicalCheckpoint
+        let generation: UInt
+    }
+
+    private struct LexicalScanResult {
+        let tokens: [Token]
+        let checkpoints: [LexicalCheckpoint]
+        let wasCancelled: Bool
+    }
+
     private static let contextPadding = 64 * 1_024
 
     static func apply(
@@ -67,17 +179,37 @@ enum SyntaxHighlighter {
         } ?? fullRange
         guard highlightRange.length > 0 else { return }
 
+        apply(
+            tokens: tokens(
+                in: storage.string,
+                language: language,
+                range: highlightRange
+            ),
+            to: storage,
+            baseFont: baseFont,
+            range: highlightRange
+        )
+    }
+
+    static func apply(
+        tokens: [Token],
+        to storage: NSTextStorage,
+        baseFont: NSFont,
+        range requestedRange: NSRange
+    ) {
+        let highlightRange = NSIntersectionRange(
+            requestedRange,
+            NSRange(location: 0, length: storage.length)
+        )
+        guard highlightRange.length > 0 else { return }
+
         storage.beginEditing()
         storage.setAttributes([
             .font: baseFont,
             .foregroundColor: NSColor.labelColor
         ], range: highlightRange)
 
-        for token in tokens(
-            in: storage.string,
-            language: language,
-            range: highlightRange
-        ) {
+        for token in tokens {
             let tokenRange = NSIntersectionRange(token.range, highlightRange)
             guard tokenRange.length > 0 else { continue }
             storage.addAttributes(
@@ -91,7 +223,10 @@ enum SyntaxHighlighter {
     static func tokens(
         in string: String,
         language: EditorLanguage,
-        range requestedRange: NSRange? = nil
+        range requestedRange: NSRange? = nil,
+        context: IncrementalContext? = nil,
+        revision: UInt? = nil,
+        isCancelled: () -> Bool = { false }
     ) -> [Token] {
         let nsString = string as NSString
         let fullRange = NSRange(location: 0, length: nsString.length)
@@ -116,11 +251,23 @@ enum SyntaxHighlighter {
                 range: highlightRange
             )
             if let configuration = lexicalConfiguration(for: language) {
-                result.append(contentsOf: lexicalTokens(
-                    in: nsString,
-                    range: contextualRange(in: nsString, around: highlightRange),
-                    configuration: configuration
-                ))
+                if let context, let revision {
+                    result.append(contentsOf: incrementalLexicalTokens(
+                        in: nsString,
+                        range: highlightRange,
+                        language: language,
+                        revision: revision,
+                        configuration: configuration,
+                        context: context,
+                        isCancelled: isCancelled
+                    ))
+                } else {
+                    result.append(contentsOf: lexicalTokens(
+                        in: nsString,
+                        range: contextualRange(in: nsString, around: highlightRange),
+                        configuration: configuration
+                    ))
+                }
             }
             return result
         }
@@ -298,88 +445,269 @@ enum SyntaxHighlighter {
         range: NSRange,
         configuration: LexicalConfiguration
     ) -> [Token] {
-        let end = min(string.length, NSMaxRange(range))
-        var location = max(0, range.location)
+        scanLexicalTokens(
+            in: string,
+            scanRange: range,
+            emissionRange: range,
+            configuration: configuration,
+            initialState: .normal,
+            isCancelled: { false }
+        ).tokens
+    }
+
+    private static func incrementalLexicalTokens(
+        in string: NSString,
+        range: NSRange,
+        language: EditorLanguage,
+        revision: UInt,
+        configuration: LexicalConfiguration,
+        context: IncrementalContext,
+        isCancelled: () -> Bool
+    ) -> [Token] {
+        let preparation = context.preparation(
+            language: language,
+            revision: revision,
+            targetLocation: range.location
+        )
+        let scanEnd = min(
+            string.length,
+            NSMaxRange(range) + checkpointStride
+        )
+        let scan = scanLexicalTokens(
+            in: string,
+            scanRange: NSRange(
+                location: preparation.checkpoint.location,
+                length: max(0, scanEnd - preparation.checkpoint.location)
+            ),
+            emissionRange: range,
+            configuration: configuration,
+            initialState: preparation.checkpoint.state,
+            isCancelled: isCancelled
+        )
+        guard !scan.wasCancelled else { return [] }
+        context.commit(
+            scan.checkpoints,
+            language: language,
+            revision: revision,
+            generation: preparation.generation
+        )
+        return scan.tokens
+    }
+
+    private static let checkpointStride = 16 * 1_024
+
+    private static func scanLexicalTokens(
+        in string: NSString,
+        scanRange: NSRange,
+        emissionRange: NSRange,
+        configuration: LexicalConfiguration,
+        initialState: LexicalState,
+        isCancelled: () -> Bool
+    ) -> LexicalScanResult {
+        let end = min(string.length, NSMaxRange(scanRange))
+        var location = max(0, scanRange.location)
+        var lineStart = location
         var result: [Token] = []
         let delimiters = configuration.strings.sorted {
             $0.value.utf16.count > $1.value.utf16.count
         }
+        var state = initialState
+        var tokenStart: Int? = state == .normal ? nil : location
+        var checkpoints: [LexicalCheckpoint] = []
+        var lastCheckpointLocation = location
+        var scannedCharacters = 0
+
+        func emit(from start: Int, to tokenEnd: Int, kind: TokenKind) {
+            let tokenRange = NSRange(
+                location: start,
+                length: max(0, tokenEnd - start)
+            )
+            if NSIntersectionRange(tokenRange, emissionRange).length > 0 {
+                result.append(Token(range: tokenRange, kind: kind))
+            }
+        }
+
+        func recordCheckpointIfNeeded() {
+            guard location - lastCheckpointLocation >= checkpointStride else {
+                return
+            }
+            checkpoints.append(LexicalCheckpoint(
+                location: location,
+                state: state
+            ))
+            lastCheckpointLocation = location
+        }
+
+        func advanceLineBreak() {
+            if string.character(at: location) == 0x0D,
+               location + 1 < string.length,
+               string.character(at: location + 1) == 0x0A {
+                location += 2
+            } else {
+                location += 1
+            }
+            lineStart = location
+            recordCheckpointIfNeeded()
+        }
 
         while location < end {
-            if let block = configuration.blockComment,
-               hasPrefix(block.start, in: string, at: location, limit: end) {
-                let contentStart = location + block.start.utf16.count
-                let tokenEnd = rangeOf(
-                    block.end,
-                    in: string,
-                    from: contentStart,
-                    limit: end
-                ).map(NSMaxRange) ?? end
-                result.append(Token(
-                    range: NSRange(location: location, length: tokenEnd - location),
-                    kind: .comment
-                ))
-                location = tokenEnd
-                continue
-            }
-
-            if let marker = configuration.lineComments.first(where: {
-                hasPrefix($0, in: string, at: location, limit: end)
-                    && (!configuration.lineCommentRequiresBoundary
-                        || isCommentBoundary(in: string, at: location))
-            }) {
-                let tokenEnd = lineEnd(
-                    in: string,
-                    from: location + marker.utf16.count,
-                    limit: end
+            if scannedCharacters.isMultiple(of: 4_096), isCancelled() {
+                return LexicalScanResult(
+                    tokens: [],
+                    checkpoints: [],
+                    wasCancelled: true
                 )
-                result.append(Token(
-                    range: NSRange(location: location, length: tokenEnd - location),
-                    kind: .comment
-                ))
-                location = tokenEnd
-                continue
             }
+            scannedCharacters += 1
 
-            if configuration.supportsJavaScriptRegexLiterals,
-               string.character(at: location) == 0x2F,
-               isJavaScriptRegexStart(
-                   in: string,
-                   at: location,
-                   lowerBound: range.location
-               ) {
-                let tokenEnd = javascriptRegexEnd(
+            switch state {
+            case .normal:
+                if let block = configuration.blockComment,
+                   hasPrefix(block.start, in: string, at: location, limit: end) {
+                    tokenStart = location
+                    state = .blockComment
+                    location += block.start.utf16.count
+                    continue
+                }
+
+                if let marker = configuration.lineComments.first(where: {
+                    hasPrefix($0, in: string, at: location, limit: end)
+                        && (!configuration.lineCommentRequiresBoundary
+                            || isCommentBoundary(in: string, at: location))
+                }) {
+                    let tokenEnd = lineEnd(
+                        in: string,
+                        from: location + marker.utf16.count,
+                        limit: end
+                    )
+                    emit(from: location, to: tokenEnd, kind: .comment)
+                    location = tokenEnd
+                    continue
+                }
+
+                if configuration.supportsJavaScriptRegexLiterals,
+                   string.character(at: location) == 0x2F,
+                   isJavaScriptRegexStart(
+                       in: string,
+                       at: location,
+                       lowerBound: lineStart
+                   ) {
+                    let tokenEnd = javascriptRegexEnd(
+                        in: string,
+                        from: location,
+                        limit: end
+                    )
+                    emit(from: location, to: tokenEnd, kind: .string)
+                    location = tokenEnd
+                    continue
+                }
+
+                if let delimiterIndex = delimiters.firstIndex(where: {
+                    hasPrefix($0.value, in: string, at: location, limit: end)
+                }) {
+                    tokenStart = location
+                    state = .string(delimiterIndex)
+                    location += delimiters[delimiterIndex].value.utf16.count
+                    continue
+                }
+
+                if isLineTerminator(string.character(at: location)) {
+                    advanceLineBreak()
+                } else {
+                    location += 1
+                }
+
+            case .blockComment:
+                if let block = configuration.blockComment,
+                   hasPrefix(block.end, in: string, at: location, limit: end) {
+                    location += block.end.utf16.count
+                    emit(
+                        from: tokenStart ?? scanRange.location,
+                        to: location,
+                        kind: .comment
+                    )
+                    tokenStart = nil
+                    state = .normal
+                } else if isLineTerminator(string.character(at: location)) {
+                    advanceLineBreak()
+                } else {
+                    location += 1
+                }
+
+            case let .string(delimiterIndex):
+                let delimiter = delimiters[delimiterIndex]
+                let delimiterLength = delimiter.value.utf16.count
+                if delimiter.allowsBackslashEscapes,
+                   string.character(at: location) == 0x5C {
+                    if location + 1 < end,
+                       isLineTerminator(string.character(at: location + 1)) {
+                        location += 1
+                        advanceLineBreak()
+                    } else {
+                        location = min(end, location + 2)
+                    }
+                } else if !delimiter.allowsLineBreaks,
+                          isLineTerminator(string.character(at: location)) {
+                    emit(
+                        from: tokenStart ?? scanRange.location,
+                        to: location,
+                        kind: .string
+                    )
+                    tokenStart = nil
+                    state = .normal
+                } else if hasPrefix(
+                    delimiter.value,
                     in: string,
-                    from: location,
+                    at: location,
                     limit: end
-                )
-                result.append(Token(
-                    range: NSRange(location: location, length: tokenEnd - location),
-                    kind: .string
-                ))
-                location = tokenEnd
-                continue
+                ) {
+                    if delimiter.allowsDoubledDelimiter,
+                       hasPrefix(
+                        delimiter.value + delimiter.value,
+                        in: string,
+                        at: location,
+                        limit: end
+                       ) {
+                        location += delimiterLength * 2
+                    } else {
+                        location += delimiterLength
+                        emit(
+                            from: tokenStart ?? scanRange.location,
+                            to: location,
+                            kind: .string
+                        )
+                        tokenStart = nil
+                        state = .normal
+                    }
+                } else if isLineTerminator(string.character(at: location)) {
+                    advanceLineBreak()
+                } else {
+                    location += 1
+                }
             }
-
-            if let delimiter = delimiters.first(where: {
-                hasPrefix($0.value, in: string, at: location, limit: end)
-            }) {
-                let tokenEnd = stringEnd(
-                    in: string,
-                    from: location,
-                    limit: end,
-                    delimiter: delimiter
-                )
-                result.append(Token(
-                    range: NSRange(location: location, length: tokenEnd - location),
-                    kind: .string
-                ))
-                location = tokenEnd
-                continue
-            }
-            location += 1
         }
-        return result
+
+        switch state {
+        case .normal:
+            break
+        case .blockComment:
+            emit(
+                from: tokenStart ?? scanRange.location,
+                to: end,
+                kind: .comment
+            )
+        case .string:
+            emit(
+                from: tokenStart ?? scanRange.location,
+                to: end,
+                kind: .string
+            )
+        }
+        return LexicalScanResult(
+            tokens: result,
+            checkpoints: checkpoints,
+            wasCancelled: false
+        )
     }
 
     private static func isJavaScriptRegexStart(

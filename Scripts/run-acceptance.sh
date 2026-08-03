@@ -11,7 +11,7 @@ fail() {
     exit 1
 }
 
-print "[1/5] 发布门禁与静态分析"
+print "[1/6] 发布门禁与静态分析"
 "$SCRIPT_DIR/verify-release.sh"
 xcodebuild \
     -quiet \
@@ -23,7 +23,7 @@ xcodebuild \
     CODE_SIGNING_ALLOWED=NO \
     analyze
 
-print "[2/5] 文件读写与格式集成验证"
+print "[2/6] 文件读写与格式集成验证"
 swiftc \
     LacEditor/Models/EditorLanguage.swift \
     LacEditor/Models/FileTreeNode.swift \
@@ -32,10 +32,12 @@ swiftc \
     -o .build/file-service-verification
 .build/file-service-verification
 
-print "[3/5] 大文件性能基线"
-swiftc -O \
+print "[3/6] 大文件性能基线"
+swiftc -O -parse-as-library \
     LacEditor/Models/EditorLanguage.swift \
+    LacEditor/Models/EditorDocument.swift \
     LacEditor/Services/TextSearchService.swift \
+    LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
     LacEditor/Preview/MarkdownRenderer.swift \
@@ -43,7 +45,23 @@ swiftc -O \
     -o .build/performance-verification
 .build/performance-verification
 
-print "[4/5] 产物、平台与隐私静态检查"
+print "[4/6] 1/10/20/50/100 MB 文件门禁"
+swiftc -O -parse-as-library \
+    Verification/LargeFixtureGenerator.swift \
+    -o .build/large-fixture-generator
+fixture_directory=".build/LargeFileFixtures"
+.build/large-fixture-generator "$fixture_directory"
+swiftc -O -parse-as-library \
+    LacEditor/Models/EditorLanguage.swift \
+    LacEditor/Models/EditorDocument.swift \
+    LacEditor/Models/FileTreeNode.swift \
+    LacEditor/Services/FileService.swift \
+    LacEditor/Services/TextSearchService.swift \
+    Verification/LargeFileIOVerification.swift \
+    -o .build/large-file-verification
+.build/large-file-verification "$fixture_directory"
+
+print "[5/6] 产物、平台与隐私静态检查"
 app_path=".build/XcodeDerivedData/Build/Products/Release/LacEditor.app"
 info_plist="$app_path/Contents/Info.plist"
 binary="$app_path/Contents/MacOS/LacEditor"
@@ -74,7 +92,7 @@ if rg -n 'URLSession|NWConnection|import Network|com\.apple\.security\.network' 
     fail "源码或工程中发现未审核的网络 API/权限。"
 fi
 
-print "[5/5] 构建隔离的 UI 验收 App"
+print "[6/6] 构建隔离的 UI 验收 App"
 xcodebuild \
     -project LacEditor.xcodeproj \
     -scheme LacEditor \

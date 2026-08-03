@@ -139,6 +139,16 @@ let orderedMarkdown = """
 4. 第四项
 5. 第五项
 """
+let veryLongOrderedList = (1...501)
+    .map { "\($0). item \($0)" }
+    .joined(separator: "\n") as NSString
+require(
+    ListContinuationService.orderedListExceedsBackgroundThreshold(
+        in: veryLongOrderedList,
+        aroundUTF16Location: veryLongOrderedList.length / 2
+    ),
+    "ordered lists over 500 items use background normalization"
+)
 let orderedHTML = MarkdownRenderer.render(orderedMarkdown, darkMode: false)
 require(orderedHTML.contains(#"<ol start="3">"#), "ordered list resumes at explicit number")
 require(orderedHTML.contains("<li>第五项</li>"), "ordered list keeps later items")
@@ -273,6 +283,112 @@ let javascriptDivision = "const ratio = total / count;"
 require(
     effectiveSyntaxKind("/", in: javascriptDivision, language: .javascript) == nil,
     "JavaScript division is not classified as a regex or comment"
+)
+
+let incrementalCommentBody = String(repeating: "comment payload\n", count: 6_000)
+let incrementalCommentSource = "/*\n\(incrementalCommentBody)deep_marker\n*/\nconst after = true;"
+let incrementalCommentContext = SyntaxHighlighter.IncrementalContext()
+let incrementalMarkerRange = (incrementalCommentSource as NSString).range(
+    of: "deep_marker"
+)
+let incrementalMarkerTokens = SyntaxHighlighter.tokens(
+    in: incrementalCommentSource,
+    language: .javascript,
+    range: incrementalMarkerRange,
+    context: incrementalCommentContext,
+    revision: 0
+)
+require(
+    incrementalMarkerTokens.last {
+        NSLocationInRange(incrementalMarkerRange.location, $0.range)
+    }?.kind == .comment,
+    "incremental highlighting carries block-comment state beyond 64 KiB"
+)
+let incrementalAfterRange = (incrementalCommentSource as NSString).range(
+    of: "const after"
+)
+let incrementalAfterTokens = SyntaxHighlighter.tokens(
+    in: incrementalCommentSource,
+    language: .javascript,
+    range: incrementalAfterRange,
+    context: incrementalCommentContext,
+    revision: 0
+)
+require(
+    incrementalAfterTokens.last {
+        NSLocationInRange(incrementalAfterRange.location, $0.range)
+    }?.kind == .keyword,
+    "incremental highlighting exits a long block comment"
+)
+
+let closeRange = (incrementalCommentSource as NSString).range(of: "*/")
+let unclosedIncrementalSource = (incrementalCommentSource as NSString)
+    .replacingCharacters(in: closeRange, with: "  ")
+incrementalCommentContext.invalidate(after: closeRange.location)
+let invalidatedTokens = SyntaxHighlighter.tokens(
+    in: unclosedIncrementalSource,
+    language: .javascript,
+    range: incrementalAfterRange,
+    context: incrementalCommentContext,
+    revision: 1
+)
+require(
+    invalidatedTokens.last {
+        NSLocationInRange(incrementalAfterRange.location, $0.range)
+    }?.kind == .comment,
+    "editing a closing delimiter invalidates following lexical checkpoints"
+)
+
+let templateBody = String(repeating: "template payload\n", count: 5_000)
+let templateSource = "const text = `\(templateBody)template_marker`;\nconst done = true;"
+let templateContext = SyntaxHighlighter.IncrementalContext()
+let templateMarkerRange = (templateSource as NSString).range(of: "template_marker")
+let templateTokens = SyntaxHighlighter.tokens(
+    in: templateSource,
+    language: .javascript,
+    range: templateMarkerRange,
+    context: templateContext,
+    revision: 0
+)
+require(
+    templateTokens.last {
+        NSLocationInRange(templateMarkerRange.location, $0.range)
+    }?.kind == .string,
+    "incremental highlighting carries multiline-string state beyond 64 KiB"
+)
+
+let checkpointScanEnd = 1 + (16 * 1_024)
+let continuedStringPrefix = "const value = \""
+let continuedStringPadding = String(
+    repeating: "x",
+    count: checkpointScanEnd - (continuedStringPrefix as NSString).length - 2
+)
+let continuedStringSource = continuedStringPrefix
+    + continuedStringPadding
+    + "\\\r\ncontinued_marker\";"
+let continuedStringContext = SyntaxHighlighter.IncrementalContext()
+_ = SyntaxHighlighter.tokens(
+    in: continuedStringSource,
+    language: .javascript,
+    range: NSRange(location: 0, length: 1),
+    context: continuedStringContext,
+    revision: 0
+)
+let continuedStringMarkerRange = (continuedStringSource as NSString).range(
+    of: "continued_marker"
+)
+let continuedStringTokens = SyntaxHighlighter.tokens(
+    in: continuedStringSource,
+    language: .javascript,
+    range: continuedStringMarkerRange,
+    context: continuedStringContext,
+    revision: 0
+)
+require(
+    continuedStringTokens.last {
+        NSLocationInRange(continuedStringMarkerRange.location, $0.range)
+    }?.kind == .string,
+    "incremental checkpoint never splits an escaped CRLF continuation"
 )
 require(
     effectiveSyntaxKind("interface", in: "interface Item { value: string }", language: .typescript)
@@ -434,6 +550,59 @@ openedDocument.refreshDirtyState()
 require(openedDocument.isDirty, "clearing saved file remains dirty")
 openedDocument.markSaved()
 require(!openedDocument.isDirty, "marking document saved clears dirty state")
+
+let liveDocument = EditorDocument(
+    text: "已保存内容",
+    url: URL(fileURLWithPath: "/tmp/live-sync.txt")
+)
+var liveText = "已保存内容 + 编辑"
+var acknowledgedRevision: UInt?
+let liveProviderID = UUID()
+liveDocument.attachLiveTextProvider(
+    id: liveProviderID,
+    provider: { liveText },
+    acknowledgement: { acknowledgedRevision = $0 }
+)
+liveDocument.noteLiveEdit(isEmpty: false)
+require(
+    liveDocument.text == "已保存内容",
+    "live editing defers the full model snapshot"
+)
+require(liveDocument.isDirty, "live editing marks the document dirty immediately")
+require(liveDocument.hasPendingLiveEdits, "live editing records a pending snapshot")
+require(liveDocument.synchronizeLiveText(), "pending live text synchronizes on demand")
+require(liveDocument.text == liveText, "live text synchronization uses the current editor text")
+require(
+    acknowledgedRevision == liveDocument.textRevision,
+    "the active editor acknowledges its synchronized model revision"
+)
+
+liveText = "已保存内容"
+liveDocument.noteLiveEdit(isEmpty: false)
+liveDocument.refreshDirtyState()
+require(!liveDocument.isDirty, "idle reconciliation detects undo back to the saved text")
+liveDocument.detachLiveTextProvider(id: liveProviderID)
+
+let liveUntitledDocument = EditorDocument()
+var liveUntitledText = "草稿"
+let liveUntitledProviderID = UUID()
+liveUntitledDocument.attachLiveTextProvider(
+    id: liveUntitledProviderID,
+    provider: { liveUntitledText },
+    acknowledgement: { _ in }
+)
+liveUntitledDocument.noteLiveEdit(isEmpty: false)
+require(
+    !liveUntitledDocument.isDisposableBlank,
+    "pending non-empty untitled text is not disposable"
+)
+liveUntitledText = ""
+liveUntitledDocument.noteLiveEdit(isEmpty: true)
+require(
+    liveUntitledDocument.isDisposableBlank,
+    "pending empty untitled text remains disposable without a full snapshot"
+)
+liveUntitledDocument.detachLiveTextProvider(id: liveUntitledProviderID)
 
 require(
     TextSearchService.interpreted(#"第一行\n第二行\t值\s\\尾"#, enabled: true)

@@ -322,6 +322,32 @@ final class WindowManager: ObservableObject {
         return true
     }
 
+    var hasPendingSaves: Bool {
+        states.values.contains(where: \.hasPendingSave)
+    }
+
+    func finishTerminationAfterPendingSaves(
+        completion: @escaping (Bool) -> Void
+    ) {
+        waitForPendingSaves { [weak self] in
+            guard let self else {
+                completion(false)
+                return
+            }
+            completion(confirmClosingAllWindows())
+        }
+    }
+
+    private func waitForPendingSaves(completion: @escaping () -> Void) {
+        guard hasPendingSaves else {
+            completion()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            self?.waitForPendingSaves(completion: completion)
+        }
+    }
+
     private func transferDocument(
         _ documentID: UUID,
         from sourceState: AppState,

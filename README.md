@@ -2,7 +2,7 @@
 
 LacEditor 是一款面向 macOS 14 及以上版本的轻量原生文本编辑器。工程使用 SwiftUI 构建界面，以 AppKit `NSTextView` 提供编辑能力，并使用 WebKit 在本地呈现 Markdown 预览。应用不需要登录、云同步或网络权限，也不采集用户内容。
 
-当前版本：`0.3.0 (3)`
+当前版本：`0.4.0 (4)`
 
 ## 构建
 
@@ -79,6 +79,33 @@ Bundle ID 隔离的 UI 验收 App，避免污染正式应用的最近文件和�
 文档内容与文件状态由 `AppState` 和 `EditorDocument` 统一管理。编辑器、预览、标签和状态栏
 只订阅当前文档，文件 I/O 与渲染逻辑互不依赖。
 
+### 大文件性能策略
+
+- UTF-8 文件的磁盘读取和解码在后台执行；20 MB 以上使用内存映射读取。超过 20 MB 或
+  25 万行自动进入大文件模式，超过 50 MB 会先警告并进入超大文件保护模式。
+- 大文件模式默认暂停自动换行、Markdown 预览、折叠和实时字数统计；超大文件模式同时暂停
+  语法高亮。状态栏和“显示”菜单可为当前标签临时恢复，关闭标签后不写入永久设置。
+- 超过 500,000 个 UTF-16 单元的内容仅计算可视区及缓冲区高亮；Token 在后台生成，颜色属性
+  在主线程一次性应用，过期任务不会覆盖较新的文本或视口。
+- 行号滚动刷新会合并到下一轮主线程循环；窗口只挂载当前编辑器。非活动 AppKit 会话最多
+  缓存 3 个、总预算 64 MB，单会话超过 24 MB 不缓存，并响应 macOS 内存压力通知。
+- 大文件使用 TextKit 非连续布局；滚动停止 120 ms 后只预布局前方一个视口。保存、搜索、
+  全部替换、JSON 格式化与 Markdown 渲染均在后台执行，revision 变化时丢弃旧结果。
+- 常见代码语言约每 16 KiB 缓存一个词法状态检查点；相邻视口从最近检查点继续扫描，编辑时
+  仅丢弃受影响位置之后的检查点，长距离跨行注释和字符串不再受固定上下文长度限制。
+- 输入期间由原生 `NSTextStorage` 持有实时内容，`EditorDocument` 按需或在短暂空闲后同步完整
+  快照；保存、查找、关闭和跨窗口移动前会强制同步，避免每次按键复制整份大文件。
+- 行号、当前行和光标位置直接读取 `NSTextStorage.mutableString`；滚动高亮复用已同步的不可变
+  文本快照，字数统计在停止输入后再执行，减少滚动和连续输入时的重复整文扫描。
+- 自动性能门禁覆盖 4 MiB / 80,000 行的 TextKit 布局与基础操作，以及 10 MB / 200,000 行
+  代码的首次增量扫描、相邻视口缓存复用、10,000 次输入通知和 10,000 次行列定位。
+
+需要分析真实 UI 性能时，在 Xcode 中选择 `Product > Profile`，使用 Instruments 的
+`Points of Interest` 模板查看 `EditorPerformance` 和 `FilePerformance` 分类。工程会分别记录
+  `FileOpen`、`FileSave`、`Search`、`ReplaceAll`、`JSONFormat`、`MarkdownRender`、
+  `EditorSessionCreate`、`EditorSessionReattach`、`TextKitVisibleLayout`、
+`SyntaxTokenize`、`SyntaxApply`、`EditorModelSync`、`LineNumberDraw` 和 `MemoryEviction`。
+
 ## 已实现
 
 - 新建、打开、保存、另存为、关闭、拖拽打开和最近文件。
@@ -115,3 +142,5 @@ Bundle ID 隔离的 UI 验收 App，避免污染正式应用的最近文件和�
 - Markdown 预览覆盖第一阶段要求的常用语法，不追求完整 CommonMark/GFM 扩展兼容。
 - 超过约 50 万 UTF-16 单元的文档改为可视区高亮，以优先保证输入流畅。
 - 文件夹工作区记忆、崩溃恢复、Git 和插件属于后续阶段，当前未实现。
+- 50 MB 是正式性能目标；100 MB 文件采用尽力支持策略。应用会允许继续打开，但为避免持续
+  无响应会默认关闭高亮、预览、换行、折叠和实时字数统计。

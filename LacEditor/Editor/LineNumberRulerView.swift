@@ -1,4 +1,10 @@
 import AppKit
+import os
+
+private let lineNumberPerformanceLog = OSLog(
+    subsystem: "com.laceditor.LacEditor",
+    category: "EditorPerformance"
+)
 
 final class LineNumberRulerView: NSRulerView {
     var lineNumberProvider: ((Int) -> Int)?
@@ -29,12 +35,28 @@ final class LineNumberRulerView: NSRulerView {
     }
 
     override func drawHashMarksAndLabels(in rect: NSRect) {
+        let drawSignpostID = OSSignpostID(log: lineNumberPerformanceLog)
+        os_signpost(
+            .begin,
+            log: lineNumberPerformanceLog,
+            name: "LineNumberDraw",
+            signpostID: drawSignpostID
+        )
+        defer {
+            os_signpost(
+                .end,
+                log: lineNumberPerformanceLog,
+                name: "LineNumberDraw",
+                signpostID: drawSignpostID
+            )
+        }
         NSColor.lacEditorBackground.setFill()
         bounds.fill(using: .copy)
 
         guard let textView = clientView as? NSTextView,
               let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else { return }
+              let textContainer = textView.textContainer,
+              let nsString = textView.textStorage?.mutableString else { return }
 
         let visibleRect = textView.visibleRect
         let containerRect = visibleRect.offsetBy(
@@ -49,7 +71,6 @@ final class LineNumberRulerView: NSRulerView {
             forBoundingRect: containerRect,
             in: textContainer
         )
-        let nsString = textView.string as NSString
         let trailingCharacter = nsString.length > 0
             ? nsString.character(at: nsString.length - 1)
             : 0

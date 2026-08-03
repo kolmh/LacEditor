@@ -29,6 +29,16 @@ struct SettingsView: View {
 
                 GridRow {
                     settingLabel(
+                        title: "性能",
+                        detail: "超过 20 MB 或 25 万行时自动启用大文件模式；超过 50 MB 时使用更严格的保护模式。阈值暂不支持自定义。"
+                    )
+                    Label("自动管理", systemImage: "gauge.with.dots.needle.33percent")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
+                GridRow {
+                    settingLabel(
                         title: "文本换行",
                         detail: "让长行保持在当前编辑区域内。"
                     )
@@ -55,7 +65,7 @@ struct SettingsView: View {
             Spacer(minLength: 24)
         }
         .padding(28)
-        .frame(width: 540, height: 340)
+        .frame(width: 540, height: 410)
     }
 
     private func settingLabel(title: String, detail: String) -> some View {

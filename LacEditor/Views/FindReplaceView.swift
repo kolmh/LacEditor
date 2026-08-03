@@ -81,6 +81,13 @@ struct FindReplaceView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if state.isWorking {
+                    ProgressView()
+                        .controlSize(.small)
+                    Button("取消") {
+                        appState.cancelFindReplaceTask()
+                    }
+                }
                 Button("关闭") {
                     close()
                 }
@@ -90,17 +97,21 @@ struct FindReplaceView: View {
                 } label: {
                     Label("上一个", systemImage: "chevron.up")
                 }
+                .disabled(state.isWorking)
                 Button {
                     appState.findNext()
                 } label: {
                     Label("下一个", systemImage: "chevron.down")
                 }
                 .keyboardShortcut(.defaultAction)
+                .disabled(state.isWorking)
 
                 if state.mode == .replace {
                     Button("替换") { appState.replaceCurrentMatch() }
+                        .disabled(state.isWorking)
                     Button("全部替换") { appState.replaceAllMatches() }
                         .buttonStyle(.borderedProminent)
+                        .disabled(state.isWorking)
                 }
             }
         }
@@ -115,6 +126,18 @@ struct FindReplaceView: View {
         .onChange(of: state.mode) { _, mode in
             modeChanged(mode)
         }
+        .onChange(of: state.query) {
+            appState.cancelFindReplaceTask()
+        }
+        .onChange(of: state.replacement) {
+            appState.cancelFindReplaceTask()
+        }
+        .onChange(of: state.isCaseSensitive) {
+            appState.cancelFindReplaceTask()
+        }
+        .onChange(of: state.interpretsEscapes) {
+            appState.cancelFindReplaceTask()
+        }
     }
 
     private func focusQueryField() {
@@ -127,6 +150,7 @@ struct FindReplaceView: View {
 @MainActor
 final class FindReplaceWindowController: NSWindowController, NSWindowDelegate {
     private weak var state: FindReplaceState?
+    private weak var appState: AppState?
     private var hasPositionedWindow = false
 
     init(appState: AppState) {
@@ -138,6 +162,7 @@ final class FindReplaceWindowController: NSWindowController, NSWindowDelegate {
         )
         super.init(window: findWindow)
         state = appState.findReplace
+        self.appState = appState
 
         findWindow.identifier = FindReplaceWindowIdentity.identifier
         findWindow.title = "查找与替换"
@@ -178,7 +203,13 @@ final class FindReplaceWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func dismiss() {
+        appState?.cancelFindReplaceTask()
+        state?.isWorking = false
         window?.orderOut(nil)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        appState?.cancelFindReplaceTask()
     }
 
     private func resize(for mode: FindReplaceMode, animated: Bool) {
