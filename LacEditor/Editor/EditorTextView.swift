@@ -47,7 +47,8 @@ struct EditorTextView: NSViewRepresentable {
         textView.usesFindPanel = true
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
-        textView.textContainerInset = NSSize(width: 18, height: 14)
+        textView.textContainerInset = NSSize(width: 10, height: 0)
+        textContainer.lineFragmentPadding = 2
         textView.backgroundColor = NSColor.lacEditorBackground
         textView.drawsBackground = true
         textView.string = document.text
@@ -623,6 +624,7 @@ struct EditorTextView: NSViewRepresentable {
                   textView?.hasMarkedText() != true else { return }
             updateCursor()
             textView?.needsDisplay = true
+            invalidateEntireRuler()
         }
 
         func synchronizeSelectionState() {

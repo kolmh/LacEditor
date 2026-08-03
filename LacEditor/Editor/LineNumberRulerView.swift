@@ -6,7 +6,6 @@ final class LineNumberRulerView: NSRulerView {
     override var isOpaque: Bool { true }
 
     private let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-    private let padding: CGFloat = 9
     private let topLineOverlay = LineNumberTopOverlayView()
 
     init(scrollView: NSScrollView, textView: NSTextView) {
@@ -27,8 +26,6 @@ final class LineNumberRulerView: NSRulerView {
     override func drawHashMarksAndLabels(in rect: NSRect) {
         NSColor.lacEditorBackground.setFill()
         bounds.fill(using: .copy)
-        NSColor.separatorColor.setFill()
-        NSRect(x: bounds.maxX - 1, y: bounds.minY, width: 1, height: bounds.height).fill()
 
         guard let textView = clientView as? NSTextView,
               let layoutManager = textView.layoutManager,
@@ -48,6 +45,26 @@ final class LineNumberRulerView: NSRulerView {
             in: textContainer
         )
         let nsString = textView.string as NSString
+        let trailingCharacter = nsString.length > 0
+            ? nsString.character(at: nsString.length - 1)
+            : 0
+        let hasTrailingEmptyLine = nsString.length == 0
+            || trailingCharacter == 0x0A
+            || trailingCharacter == 0x0D
+            || trailingCharacter == 0x2028
+            || trailingCharacter == 0x2029
+        let selectionLocation = min(textView.selectedRange().location, nsString.length)
+        let activeLineLocation: Int
+        if selectionLocation == nsString.length, hasTrailingEmptyLine {
+            activeLineLocation = nsString.length
+        } else if nsString.length > 0 {
+            let anchor = min(selectionLocation, nsString.length - 1)
+            activeLineLocation = nsString.lineRange(
+                for: NSRange(location: anchor, length: 0)
+            ).location
+        } else {
+            activeLineLocation = 0
+        }
         let firstCharacterLocation: Int
         if containerRect.minY <= 0.5 || nsString.length == 0 {
             firstCharacterLocation = 0
@@ -81,10 +98,6 @@ final class LineNumberRulerView: NSRulerView {
             ).lineNumber(at: characterRange.location)
         }
         var index = nsString.lineRange(for: NSRange(location: characterRange.location, length: 0)).location
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font,
-            .foregroundColor: NSColor.secondaryLabelColor
-        ]
         var layoutTracker = LineNumberLayoutTracker()
         var capturedTopLine = false
         topLineOverlay.isHidden = true
@@ -106,6 +119,8 @@ final class LineNumberRulerView: NSRulerView {
             lineRect.origin.x += textView.textContainerOrigin.x
             lineRect.origin.y += textView.textContainerOrigin.y
             let rulerRect = convert(lineRect, from: textView)
+            let isActive = lineRange.location == activeLineLocation
+            let rowHeight = max(rulerRect.height, font.pointSize + 4)
             if !capturedTopLine,
                rulerRect.maxY >= bounds.minY,
                rulerRect.minY <= bounds.maxY {
@@ -113,27 +128,25 @@ final class LineNumberRulerView: NSRulerView {
                 topLineOverlay.update(
                     lineNumber: lineNumber,
                     labelY: rulerRect.minY,
-                    rowHeight: max(rulerRect.height, font.pointSize + 4),
-                    rulerWidth: bounds.width
+                    rowHeight: rowHeight,
+                    rulerWidth: bounds.width,
+                    isActive: isActive
                 )
             }
             if rulerRect.maxY >= rect.minY,
                rulerRect.minY <= rect.maxY,
                layoutTracker.shouldDraw(at: rulerRect.minY) {
-                draw(lineNumber: lineNumber, y: rulerRect.minY, attributes: attributes)
+                draw(
+                    lineNumber: lineNumber,
+                    y: rulerRect.minY,
+                    rowHeight: rowHeight,
+                    isActive: isActive
+                )
             }
             lineNumber += 1
             index = NSMaxRange(lineRange)
         }
 
-        let trailingCharacter = nsString.length > 0
-            ? nsString.character(at: nsString.length - 1)
-            : 0
-        let hasTrailingEmptyLine = nsString.length == 0
-            || trailingCharacter == 0x0A
-            || trailingCharacter == 0x0D
-            || trailingCharacter == 0x2028
-            || trailingCharacter == 0x2029
         if hasTrailingEmptyLine {
             let extraRect = layoutManager.extraLineFragmentRect
             var textViewRect = extraRect
@@ -149,23 +162,54 @@ final class LineNumberRulerView: NSRulerView {
                 textViewRect.origin.y += textView.textContainerOrigin.y
             }
             let rulerRect = convert(textViewRect, from: textView)
+            let rowHeight = max(rulerRect.height, font.pointSize + 4)
+            let isActive = activeLineLocation == nsString.length
+            if !capturedTopLine,
+               rulerRect.maxY >= bounds.minY,
+               rulerRect.minY <= bounds.maxY {
+                topLineOverlay.update(
+                    lineNumber: lineNumber,
+                    labelY: rulerRect.minY,
+                    rowHeight: rowHeight,
+                    rulerWidth: bounds.width,
+                    isActive: isActive
+                )
+            }
             if rulerRect.maxY >= rect.minY,
                rulerRect.minY <= rect.maxY,
                layoutTracker.shouldDraw(at: rulerRect.minY) {
-                draw(lineNumber: lineNumber, y: rulerRect.minY, attributes: attributes)
+                draw(
+                    lineNumber: lineNumber,
+                    y: rulerRect.minY,
+                    rowHeight: rowHeight,
+                    isActive: isActive
+                )
             }
         }
     }
 
-    private func draw(lineNumber: Int, y: CGFloat, attributes: [NSAttributedString.Key: Any]) {
+    private func draw(
+        lineNumber: Int,
+        y: CGFloat,
+        rowHeight: CGFloat,
+        isActive: Bool
+    ) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: isActive
+                ? NSColor.labelColor
+                : NSColor.tertiaryLabelColor
+        ]
         let value = "\(lineNumber)" as NSString
         let size = value.size(withAttributes: attributes)
         value.draw(
-            at: NSPoint(x: bounds.width - padding - size.width, y: y),
+            at: NSPoint(
+                x: floor((bounds.width - size.width) / 2),
+                y: floor(y + max(0, rowHeight - size.height) / 2)
+            ),
             withAttributes: attributes
         )
     }
-
 }
 
 private final class LineNumberTopOverlayView: NSView {
@@ -175,18 +219,22 @@ private final class LineNumberTopOverlayView: NSView {
         ofSize: 11,
         weight: .regular
     )
-    private let padding: CGFloat = 9
     private var lineNumber = 1
     private var labelY: CGFloat = 0
+    private var rowHeight: CGFloat = 0
+    private var isActive = false
 
     func update(
         lineNumber: Int,
         labelY: CGFloat,
         rowHeight: CGFloat,
-        rulerWidth: CGFloat
+        rulerWidth: CGFloat,
+        isActive: Bool
     ) {
         self.lineNumber = lineNumber
         self.labelY = labelY
+        self.rowHeight = rowHeight
+        self.isActive = isActive
         frame = NSRect(
             x: 0,
             y: 0,
@@ -200,24 +248,19 @@ private final class LineNumberTopOverlayView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         NSColor.lacEditorBackground.setFill()
         bounds.fill(using: .copy)
-        NSColor.separatorColor.setFill()
-        NSRect(
-            x: bounds.maxX - 1,
-            y: bounds.minY,
-            width: 1,
-            height: bounds.height
-        ).fill()
 
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: NSColor.secondaryLabelColor
+            .foregroundColor: isActive
+                ? NSColor.labelColor
+                : NSColor.tertiaryLabelColor
         ]
         let value = "\(lineNumber)" as NSString
         let size = value.size(withAttributes: attributes)
         value.draw(
             at: NSPoint(
-                x: bounds.width - padding - size.width,
-                y: labelY
+                x: floor((bounds.width - size.width) / 2),
+                y: floor(labelY + max(0, rowHeight - size.height) / 2)
             ),
             withAttributes: attributes
         )
