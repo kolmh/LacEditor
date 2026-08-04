@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 struct MainWindowView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isDropTargeted = false
     @StateObject private var editorSessions = EditorSessionStore(
         limit: 3,
@@ -13,26 +14,38 @@ struct MainWindowView: View {
 
     var body: some View {
         ZStack(alignment: .leading) {
-            HStack(spacing: 0) {
-                if appState.isSidebarVisible {
-                    SidebarView()
-                        .frame(width: 252)
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                }
+            editorWorkspace
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(
+                    .leading,
+                    appState.sidebarPresentation == .pinned
+                        ? LacEditorDesign.sidebarWidth
+                        : 0
+                )
 
-                editorWorkspace
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-
-            if !appState.isSidebarVisible, appState.isSidebarPreviewVisible {
-                SidebarView()
-                    .frame(width: 252)
-                    .onHover(perform: appState.sidebarPreviewHoverChanged)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-                    .zIndex(2)
-            }
+            SidebarView()
+                .frame(width: LacEditorDesign.sidebarWidth)
+                .offset(
+                    x: appState.sidebarPresentation == .hidden
+                        ? -LacEditorDesign.sidebarWidth
+                        : 0
+                )
+                .opacity(appState.sidebarPresentation == .hidden ? 0 : 1)
+                .allowsHitTesting(appState.sidebarPresentation != .hidden)
+                .onHover(perform: appState.sidebarPreviewHoverChanged)
+                .shadow(
+                    color: appState.sidebarPresentation == .preview
+                        ? Color.black.opacity(colorScheme == .dark ? 0.3 : 0.12)
+                        : .clear,
+                    radius: appState.sidebarPresentation == .preview ? 10 : 0,
+                    x: 4
+                )
+                .zIndex(2)
         }
-        .animation(.easeOut(duration: 0.18), value: appState.isSidebarVisible)
+        .animation(
+            reduceMotion ? nil : LacEditorDesign.structuralAnimation,
+            value: appState.sidebarPresentation
+        )
         .background(Color(nsColor: .lacEditorBackground))
         .toolbar {
             LacEditorToolbar()
@@ -76,8 +89,9 @@ struct MainWindowView: View {
                     Divider()
                 }
                 .transition(
-                    .move(edge: .top)
-                        .combined(with: .opacity)
+                    reduceMotion
+                        ? .opacity
+                        : .move(edge: .top).combined(with: .opacity)
                 )
             }
             if let selectedDocument = appState.selectedDocument {
@@ -89,7 +103,7 @@ struct MainWindowView: View {
                         globalDefault: appState.isWordWrapEnabled
                     ),
                     showsLineNumbers: appState.isLineNumbersVisible,
-                    editorTopInset: showsTabBar ? 6 : 0,
+                    editorTopInset: showsTabBar ? 4 : 0,
                     darkMode: colorScheme == .dark
                 )
                 .id(selectedDocument.id)
@@ -102,8 +116,14 @@ struct MainWindowView: View {
                 }
             }
         }
-        .animation(.easeInOut(duration: 0.16), value: showsTabBar)
-        .animation(.easeInOut(duration: 0.18), value: appState.isStatusBarVisible)
+        .animation(
+            reduceMotion ? nil : LacEditorDesign.chromeAnimation,
+            value: showsTabBar
+        )
+        .animation(
+            reduceMotion ? nil : LacEditorDesign.structuralAnimation,
+            value: appState.isStatusBarVisible
+        )
     }
 
     private var showsTabBar: Bool {
@@ -124,11 +144,11 @@ private struct DocumentEditorPane: View {
 
     var body: some View {
         ZStack {
-            if document.isPreviewEffectivelyEnabled {
-                HSplitView {
-                    editor
-                        .frame(minWidth: 300)
+            HSplitView {
+                editor
+                    .frame(minWidth: 300)
 
+                if document.isPreviewEffectivelyEnabled {
                     MarkdownPreview(
                         markdown: document.text,
                         darkMode: darkMode,
@@ -136,8 +156,6 @@ private struct DocumentEditorPane: View {
                     )
                     .frame(minWidth: 280)
                 }
-            } else {
-                editor
             }
             if document.ioState == .opening {
                 VStack(spacing: 12) {

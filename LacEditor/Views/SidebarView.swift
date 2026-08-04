@@ -4,32 +4,41 @@ struct SidebarView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.openSettings) private var openSettings
     @Environment(\.colorScheme) private var colorScheme
+    @State private var isSettingsHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
             RecentFilesView(store: appState.recentFiles)
 
             Divider()
+                .opacity(0.45)
 
             Button {
                 openSettings()
             } label: {
                 Label("设置", systemImage: "gearshape")
                     .font(.system(size: 12))
+                    .foregroundStyle(isSettingsHovering ? .primary : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .stableHelp("打开设置", shortcut: "⌘,")
-            .padding(.horizontal, 14)
-            .frame(height: 40)
+            .frame(height: 35)
+            .background(
+                isSettingsHovering ? Color.primary.opacity(0.05) : .clear,
+                in: RoundedRectangle(cornerRadius: 5, style: .continuous)
+            )
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .onHover { isSettingsHovering = $0 }
         }
         .background {
             ZStack {
-                Rectangle()
-                    .fill(.ultraThinMaterial)
+                LacSidebarMaterial()
                 Color(nsColor: .lacEditorBackground)
-                    .opacity(colorScheme == .dark ? 0.18 : 0.42)
+                    .opacity(colorScheme == .dark ? 0.12 : 0.22)
             }
             .ignoresSafeArea()
         }
@@ -53,15 +62,15 @@ private struct RecentFilesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
                 Text("最近文件")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
                 if !store.urls.isEmpty {
                     Text("\(store.urls.count)")
                         .font(.system(size: 10, weight: .medium))
                         .foregroundStyle(.tertiary)
+                        .monospacedDigit()
                 }
                 Spacer()
                 if !store.urls.isEmpty {
@@ -70,21 +79,22 @@ private struct RecentFilesView: View {
                     } label: {
                         Image(systemName: "trash")
                             .font(.system(size: 11))
-                            .frame(width: 22, height: 22)
+                            .frame(width: 24, height: 24)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
                     .stableHelp("清除最近文件")
                 }
             }
-            .padding(.horizontal, 14)
-            .frame(height: 42)
+            .padding(.leading, 13)
+            .padding(.trailing, 9)
+            .frame(height: 36)
 
             if store.urls.isEmpty {
-                VStack(spacing: 10) {
+                VStack(spacing: 9) {
                     Spacer()
-                    Image(systemName: "clock")
-                        .font(.system(size: 24, weight: .light))
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 21, weight: .light))
                         .foregroundStyle(.tertiary)
                     Text("暂无最近文件")
                         .font(.system(size: 12))
@@ -102,6 +112,10 @@ private struct RecentFilesView: View {
                         ForEach(store.urls, id: \.self) { url in
                             RecentFileRow(
                                 url: url,
+                                isOpen: appState.documents.contains {
+                                    $0.url?.standardizedFileURL
+                                        == url.standardizedFileURL
+                                },
                                 open: { appState.openFile(url) },
                                 openInNewWindow: { windowManager.openFileInNewWindow(url) },
                                 showInFinder: {
@@ -112,8 +126,8 @@ private struct RecentFilesView: View {
                             )
                         }
                     }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 5)
                 }
             }
         }
@@ -122,6 +136,7 @@ private struct RecentFilesView: View {
 
 private struct RecentFileRow: View {
     let url: URL
+    let isOpen: Bool
     let open: () -> Void
     let openInNewWindow: () -> Void
     let showInFinder: () -> Void
@@ -131,15 +146,19 @@ private struct RecentFileRow: View {
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: 9) {
+            HStack(spacing: 8) {
+                Capsule()
+                    .fill(isOpen ? Color.accentColor : .clear)
+                    .frame(width: 2, height: 17)
+
                 Image(systemName: EditorLanguage.infer(from: url).icon)
                     .font(.system(size: 12))
-                    .foregroundStyle(Color.accentColor.opacity(0.9))
-                    .frame(width: 17)
+                    .foregroundStyle(isOpen ? Color.accentColor : .secondary)
+                    .frame(width: 16)
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 1) {
                     Text(url.lastPathComponent)
-                        .font(.system(size: 12, weight: .medium))
+                        .font(.system(size: 12, weight: isOpen ? .medium : .regular))
                         .lineLimit(1)
                     Text(url.deletingLastPathComponent().lastPathComponent)
                         .font(.system(size: 10))
@@ -149,12 +168,15 @@ private struct RecentFileRow: View {
 
                 Spacer(minLength: 0)
             }
-            .padding(.horizontal, 8)
-            .frame(height: 38)
+            .padding(.horizontal, 6)
+            .frame(height: LacEditorDesign.sidebarRowHeight)
             .contentShape(Rectangle())
             .background(
-                isHovering ? Color.primary.opacity(0.055) : .clear,
-                in: RoundedRectangle(cornerRadius: 4)
+                isHovering ? Color.primary.opacity(0.05) : .clear,
+                in: RoundedRectangle(
+                    cornerRadius: LacEditorDesign.compactCornerRadius,
+                    style: .continuous
+                )
             )
         }
         .buttonStyle(.plain)

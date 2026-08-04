@@ -46,6 +46,8 @@ swiftc \
     LacEditor/Editor/FoldService.swift \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
+    LacEditor/Editor/CodeLexicalScanner.swift \
+    LacEditor/Editor/DelimiterMatchingService.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
     LacEditor/Preview/MarkdownRenderer.swift \
     Verification/main.swift \

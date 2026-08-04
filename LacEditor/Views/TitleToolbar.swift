@@ -2,6 +2,7 @@ import SwiftUI
 
 struct LacEditorToolbar: ToolbarContent {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some ToolbarContent {
         if #available(macOS 26.0, *) {
@@ -97,7 +98,7 @@ struct LacEditorToolbar: ToolbarContent {
             appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏",
             shortcut: "⌃⌘S"
         )
-        .onHover(perform: appState.sidebarPreviewHoverChanged)
+        .onHover(perform: appState.sidebarToggleHoverChanged)
     }
 
     private var windowTitle: some View {
@@ -107,9 +108,14 @@ struct LacEditorToolbar: ToolbarContent {
             .lineLimit(1)
             .truncationMode(.middle)
             .frame(maxWidth: 320, alignment: .leading)
-            .padding(.leading, appState.isSidebarVisible ? 144 : 0)
+            .padding(
+                .leading,
+                appState.isSidebarVisible
+                    ? LacEditorDesign.sidebarWidth - 108
+                    : 0
+            )
             .animation(
-                .easeOut(duration: 0.18),
+                reduceMotion ? nil : LacEditorDesign.structuralAnimation,
                 value: appState.isSidebarVisible
             )
             .accessibilityAddTraits(.isHeader)

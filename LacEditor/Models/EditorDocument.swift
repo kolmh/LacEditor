@@ -69,6 +69,7 @@ final class DocumentTaskCoordinator: @unchecked Sendable {
         case metrics
         case save
         case listNormalization
+        case delimiterMatch
     }
 
     private let lock = NSLock()
@@ -160,6 +161,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private var liveTextAcknowledgement: ((UInt) -> Void)?
     private(set) var hasPendingLiveEdits = false
     private var pendingLiveTextIsEmpty: Bool?
+    private var isUpdatingDirtyState = false
     private var metricsGeneration: UInt = 0
     private let metricsQueue: OperationQueue = {
         let queue = OperationQueue()
@@ -295,18 +297,24 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
 
     func refreshDirtyState() {
         synchronizeLiveText()
-        isDirty = text != savedText
+        let currentText = text
+        let savedSnapshot = savedText
+        updateDirtyState(currentText != savedSnapshot)
     }
 
     func markSaved() {
         synchronizeLiveText()
-        savedText = text
-        isDirty = false
+        let currentText = text
+        savedText = currentText
+        updateDirtyState(false)
     }
 
     func markSaved(snapshot: String, revision: UInt) {
         savedText = snapshot
-        isDirty = textRevision != revision || hasPendingLiveEdits || text != snapshot
+        let shouldBeDirty = textRevision != revision
+            || hasPendingLiveEdits
+            || text != snapshot
+        updateDirtyState(shouldBeDirty)
     }
 
     func attachLiveTextProvider(
@@ -327,18 +335,14 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         liveTextAcknowledgement = nil
         hasPendingLiveEdits = false
         pendingLiveTextIsEmpty = nil
-        isDirty = text != savedText
+        updateDirtyState(text != savedText)
     }
 
     func noteLiveEdit(isEmpty: Bool) {
         hasPendingLiveEdits = true
         pendingLiveTextIsEmpty = isEmpty
         let shouldBeDirty = !(url == nil && isEmpty)
-        if shouldBeDirty, !isDirty {
-            isDirty = true
-        } else if !shouldBeDirty, isDirty {
-            isDirty = false
-        }
+        updateDirtyState(shouldBeDirty)
     }
 
     @discardableResult
@@ -355,6 +359,14 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func synchronizedText() -> String {
         synchronizeLiveText()
         return text
+    }
+
+    private func updateDirtyState(_ newValue: Bool) {
+        guard !isUpdatingDirtyState else { return }
+        guard isDirty != newValue else { return }
+        isUpdatingDirtyState = true
+        defer { isUpdatingDirtyState = false }
+        isDirty = newValue
     }
 
     func updateLocationAfterRename(from oldURL: URL, to newURL: URL) {

@@ -5,7 +5,7 @@ struct StatusBarView: View {
     @ObservedObject var document: EditorDocument
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 10) {
             if let ioStatus = document.ioState.statusText {
                 statusItem(ioStatus, icon: "arrow.triangle.2.circlepath", color: .secondary)
             } else {
@@ -15,33 +15,28 @@ struct StatusBarView: View {
                     color: document.isDirty ? .orange : .green
                 )
             }
-            divider
-            statusItem(document.encodingName)
-            divider
-            statusItem(document.language.rawValue)
             if document.isLargeFileMode {
-                divider
                 performanceMenu
             }
-            Spacer(minLength: 12)
             if let message = document.statusMessage {
                 Text(message)
                     .font(.system(size: 11))
                     .foregroundStyle(message.hasPrefix("JSON 无效") ? .red : .secondary)
                     .lineLimit(1)
                     .help(message)
-                divider
             }
+            Spacer(minLength: 12)
+            statusItem(document.encodingName)
+            statusItem(document.language.rawValue)
             statusItem(
                 document.isWordCountEnabled
                     ? "字数：\(document.wordCount)"
                     : "字数统计已暂停"
             )
-            divider
             statusItem("行 \(document.cursorLine)，列 \(document.cursorColumn)")
         }
-        .padding(.horizontal, 10)
-        .frame(height: 25)
+        .padding(.horizontal, 9)
+        .frame(height: LacEditorDesign.statusBarHeight)
         .background(Color(nsColor: .lacEditorBackground))
     }
 
@@ -86,7 +81,6 @@ struct StatusBarView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .padding(.horizontal, 7)
         .help("查看大文件模式的性能保护选项")
     }
 
@@ -114,12 +108,6 @@ struct StatusBarView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
-        .padding(.horizontal, 7)
-    }
-
-    private var divider: some View {
-        Rectangle()
-            .fill(Color(nsColor: .separatorColor))
-            .frame(width: 1, height: 12)
+        .fixedSize(horizontal: true, vertical: false)
     }
 }

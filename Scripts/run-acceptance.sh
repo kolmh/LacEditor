@@ -39,6 +39,8 @@ swiftc -O -parse-as-library \
     LacEditor/Services/TextSearchService.swift \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
+    LacEditor/Editor/CodeLexicalScanner.swift \
+    LacEditor/Editor/DelimiterMatchingService.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
     LacEditor/Preview/MarkdownRenderer.swift \
     Verification/PerformanceVerification.swift \
@@ -57,6 +59,8 @@ swiftc -O -parse-as-library \
     LacEditor/Models/FileTreeNode.swift \
     LacEditor/Services/FileService.swift \
     LacEditor/Services/TextSearchService.swift \
+    LacEditor/Editor/CodeLexicalScanner.swift \
+    LacEditor/Editor/DelimiterMatchingService.swift \
     Verification/LargeFileIOVerification.swift \
     -o .build/large-file-verification
 .build/large-file-verification "$fixture_directory"

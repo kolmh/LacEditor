@@ -21,15 +21,21 @@ extension NSColor {
                 calibratedRed: 0.48,
                 green: 0.53,
                 blue: 0.88,
-                alpha: 0.16
+                alpha: 0.085
             )
         }
         return NSColor(
             calibratedRed: 0.31,
             green: 0.34,
             blue: 0.66,
-            alpha: 0.065
+            alpha: 0.035
         )
+    }
+
+    static let lacDelimiterMatchBackground = NSColor(name: nil) { appearance in
+        let alpha: CGFloat = appearance.bestMatch(from: [.darkAqua, .aqua])
+            == .darkAqua ? 0.24 : 0.14
+        return NSColor.controlAccentColor.withAlphaComponent(alpha)
     }
 }
 

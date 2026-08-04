@@ -165,6 +165,172 @@ require(EditorLanguage.infer(from: URL(fileURLWithPath: "config.yml")) == .yaml,
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "engine.cpp")) == .cFamily, "C++ language inference")
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "schema.sql")) == .sql, "SQL language inference")
 
+private func delimiterMatch(
+    in text: String,
+    at location: Int,
+    length: Int = 0,
+    language: EditorLanguage,
+    revision: UInt = 1,
+    context: DelimiterMatchingService.Context = .init()
+) -> DelimiterMatchingService.Match? {
+    DelimiterMatchingService.match(
+        in: text,
+        selection: NSRange(location: location, length: length),
+        language: language,
+        revision: revision,
+        context: context
+    )
+}
+
+let nestedDelimiters = "函数() { let values = [中文, (1 + 2)] }" as NSString
+let outerOpening = nestedDelimiters.range(of: "{").location
+let outerClosing = nestedDelimiters.range(of: "}").location
+let outerMatch = delimiterMatch(
+    in: nestedDelimiters as String,
+    at: outerOpening,
+    language: .javascript
+)
+require(outerMatch?.openingRange.location == outerOpening, "opening brace match")
+require(outerMatch?.closingRange.location == outerClosing, "nested closing brace match")
+require(
+    delimiterMatch(
+        in: nestedDelimiters as String,
+        at: outerOpening + 1,
+        language: .javascript
+    ) == outerMatch,
+    "caret after opening brace match"
+)
+
+let closingCaretMatch = delimiterMatch(
+    in: nestedDelimiters as String,
+    at: outerClosing + 1,
+    language: .javascript
+)
+require(closingCaretMatch == outerMatch, "caret after closing brace match")
+
+let selectedBracket = nestedDelimiters.range(of: "[")
+require(
+    delimiterMatch(
+        in: nestedDelimiters as String,
+        at: selectedBracket.location,
+        length: 1,
+        language: .javascript
+    )?.openingRange == selectedBracket,
+    "single selected bracket match"
+)
+require(
+    delimiterMatch(
+        in: nestedDelimiters as String,
+        at: outerOpening,
+        length: 2,
+        language: .javascript
+    ) == nil,
+    "multi-character selection does not match"
+)
+
+let protectedJavaScript = #"""
+let a = "fake { }"; // fake [ ]
+let b = `template ( )`;
+let r = /[{}()]/;
+/* fake { [ ( ) ] } */
+function run() { return [1, 2]; }
+"""# as NSString
+for marker in ["fake {", "fake [", "template (", "[{}()", "/* fake {"] {
+    let protectedLocation = protectedJavaScript.range(of: marker).location
+        + (marker as NSString).length - 1
+    require(
+        delimiterMatch(
+            in: protectedJavaScript as String,
+            at: protectedLocation,
+            language: .javascript
+        ) == nil,
+        "delimiter inside protected JavaScript token is ignored: \(marker)"
+    )
+}
+let functionOpening = protectedJavaScript.range(
+    of: "{",
+    options: [],
+    range: NSRange(
+        location: protectedJavaScript.range(of: "function run").location,
+        length: protectedJavaScript.length
+            - protectedJavaScript.range(of: "function run").location
+    )
+).location
+require(
+    delimiterMatch(
+        in: protectedJavaScript as String,
+        at: functionOpening,
+        language: .javascript
+    ) != nil,
+    "real JavaScript block still matches"
+)
+
+require(
+    delimiterMatch(in: "([)]", at: 0, language: .javascript) == nil,
+    "crossed delimiters do not produce a false pair"
+)
+require(
+    delimiterMatch(in: "{ missing", at: 0, language: .json) == nil,
+    "unclosed delimiter stays silent"
+)
+require(
+    delimiterMatch(in: "[link](url)", at: 0, language: .markdown) == nil,
+    "Markdown is outside delimiter matching scope"
+)
+let delimiterLanguages: [EditorLanguage] = [
+    .json, .javascript, .typescript, .css, .python, .swift,
+    .shell, .yaml, .cFamily, .sql
+]
+for language in delimiterLanguages {
+    require(
+        delimiterMatch(in: "{[()]}", at: 0, language: language) != nil,
+        "delimiter matching is enabled for \(language.rawValue)"
+    )
+}
+for language in [EditorLanguage.plainText, .markdown, .html] {
+    require(
+        !DelimiterMatchingService.supports(language),
+        "delimiter matching stays disabled for \(language.rawValue)"
+    )
+}
+
+let longComment = "{ // " + String(repeating: "x", count: 70_000) + " }\n}"
+require(
+    delimiterMatch(in: longComment, at: 0, language: .javascript)?.closingRange.location
+        == (longComment as NSString).length - 1,
+    "line comments remain protected across lexical chunks"
+)
+let longRegex = "let r = /" + String(repeating: "x", count: 70_000)
+    + "{}/;\nfunction run() {}"
+let fakeRegexBrace = (longRegex as NSString).range(of: "{").location
+require(
+    delimiterMatch(in: longRegex, at: fakeRegexBrace, language: .javascript) == nil,
+    "JavaScript regex remains protected across lexical chunks"
+)
+
+let changingContext = DelimiterMatchingService.Context()
+require(
+    delimiterMatch(
+        in: "{[]}",
+        at: 0,
+        language: .json,
+        revision: 1,
+        context: changingContext
+    ) != nil,
+    "initial revision matches"
+)
+changingContext.invalidate(after: 1)
+require(
+    delimiterMatch(
+        in: "{[()]}",
+        at: 0,
+        language: .json,
+        revision: 2,
+        context: changingContext
+    )?.closingRange.location == 5,
+    "edited revision rebuilds invalidated delimiter checkpoints"
+)
+
 private func effectiveSyntaxKind(
     _ needle: String,
     in text: String,
@@ -582,6 +748,23 @@ liveDocument.noteLiveEdit(isEmpty: false)
 liveDocument.refreshDirtyState()
 require(!liveDocument.isDirty, "idle reconciliation detects undo back to the saved text")
 liveDocument.detachLiveTextProvider(id: liveProviderID)
+
+let reentrantDocument = EditorDocument(text: "已保存")
+var dirtyStateNotificationCount = 0
+let dirtyStateCancellable = reentrantDocument.$isDirty
+    .dropFirst()
+    .sink { _ in
+        dirtyStateNotificationCount += 1
+        reentrantDocument.refreshDirtyState()
+    }
+reentrantDocument.text = "已修改"
+reentrantDocument.refreshDirtyState()
+require(reentrantDocument.isDirty, "reentrant dirty-state refresh keeps the correct result")
+require(
+    dirtyStateNotificationCount == 1,
+    "reentrant dirty-state refresh does not publish recursively"
+)
+dirtyStateCancellable.cancel()
 
 let liveUntitledDocument = EditorDocument()
 var liveUntitledText = "草稿"

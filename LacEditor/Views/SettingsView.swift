@@ -50,14 +50,26 @@ struct SettingsView: View {
                 GridRow {
                     settingLabel(
                         title: "编辑器字体",
-                        detail: "调整所有标签页的等宽字体大小。"
+                        detail: "调整所有标签页的等宽字体大小，默认 14 pt。"
                     )
-                    Stepper(
-                        "\(Int(appState.editorFontSize)) pt",
-                        value: $appState.editorFontSize,
-                        in: 9...32
-                    )
-                    .fixedSize()
+                    HStack(spacing: 12) {
+                        Stepper(
+                            "\(Int(appState.editorFontSize)) pt",
+                            value: $appState.editorFontSize,
+                            in: 9...32
+                        )
+                        .fixedSize()
+
+                        Button {
+                            appState.resetFontSize()
+                        } label: {
+                            Label("恢复默认", systemImage: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .disabled(appState.isUsingDefaultFontSize)
+                        .stableHelp("恢复默认字体大小", shortcut: "⌘0")
+                    }
                 }
             }
             .padding(.top, 22)

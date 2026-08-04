@@ -35,6 +35,29 @@ enum LargeFileIOVerification {
             require(profile == expectedProfile, "\(name) profile was \(profile)")
             require(elapsed < limit, "\(name) decode took \(elapsed)s")
 
+            if megabytes == 1 || megabytes == 10 {
+                let wrapped = "{\n" + decoded.text + "\n}"
+                let delimiterStart = ProcessInfo.processInfo.systemUptime
+                let delimiterMatch = DelimiterMatchingService.match(
+                    in: wrapped,
+                    selection: NSRange(location: 0, length: 0),
+                    language: .javascript,
+                    revision: 0,
+                    context: .init()
+                )
+                let delimiterElapsed = ProcessInfo.processInfo.systemUptime
+                    - delimiterStart
+                require(
+                    delimiterMatch?.closingRange.location
+                        == (wrapped as NSString).length - 1,
+                    "\(megabytes) MB distant delimiter result"
+                )
+                require(
+                    delimiterElapsed < 1.5,
+                    "\(megabytes) MB delimiter match took \(delimiterElapsed)s"
+                )
+            }
+
             if megabytes == 50 {
                 let searchStart = ProcessInfo.processInfo.systemUptime
                 let match = TextSearchService.previousRange(
@@ -46,6 +69,42 @@ enum LargeFileIOVerification {
                 let searchElapsed = ProcessInfo.processInfo.systemUptime - searchStart
                 require(match != nil, "50 MB search result")
                 require(searchElapsed < 1.5, "50 MB search took \(searchElapsed)s")
+
+                let text = decoded.text as NSString
+                let delimiterContext = DelimiterMatchingService.Context()
+                let delimiterStart = ProcessInfo.processInfo.systemUptime
+                var matchedCount = 0
+                for sample in 0..<100 {
+                    let approximate = min(
+                        text.length - 1,
+                        (text.length * sample) / 100
+                    )
+                    let range = text.range(
+                        of: "{",
+                        options: [],
+                        range: NSRange(
+                            location: approximate,
+                            length: text.length - approximate
+                        )
+                    )
+                    guard range.location != NSNotFound else { continue }
+                    if DelimiterMatchingService.match(
+                        in: decoded.text,
+                        selection: range,
+                        language: .json,
+                        revision: 0,
+                        context: delimiterContext
+                    ) != nil {
+                        matchedCount += 1
+                    }
+                }
+                let delimiterElapsed = ProcessInfo.processInfo.systemUptime
+                    - delimiterStart
+                require(matchedCount == 100, "50 MB repeated delimiter results")
+                require(
+                    delimiterElapsed < 4,
+                    "50 MB 100 delimiter moves took \(delimiterElapsed)s"
+                )
             }
             print(String(format: "%@ decoded in %.3fs", name, elapsed))
         }

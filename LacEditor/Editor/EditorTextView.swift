@@ -201,6 +201,9 @@ struct EditorTextView: NSViewRepresentable {
         if documentChanged || revisionChanged || fontChanged || languageChanged {
             context.coordinator.scheduleHighlight(delay: 0)
         }
+        if documentChanged || revisionChanged || languageChanged {
+            context.coordinator.scheduleDelimiterMatch(delay: 0)
+        }
     }
 
     private func editorFont(size: CGFloat) -> NSFont {
@@ -236,6 +239,19 @@ struct EditorTextView: NSViewRepresentable {
         }()
         private var highlightOperation: BlockOperation?
         private let syntaxHighlightContext = SyntaxHighlighter.IncrementalContext()
+        private let delimiterMatchingContext = DelimiterMatchingService.Context()
+        private var delimiterMatchWorkItem: DispatchWorkItem?
+        private let delimiterMatchQueue: OperationQueue = {
+            let queue = OperationQueue()
+            queue.name = "com.laceditor.delimiter-matching"
+            queue.maxConcurrentOperationCount = 1
+            queue.qualityOfService = .userInitiated
+            return queue
+        }()
+        private var delimiterMatchOperation: BlockOperation?
+        private var delimiterSnapshot: String?
+        private var delimiterSnapshotRevision: UInt?
+        private var delimiterHighlightRanges: [NSRange] = []
         private var highlightGeneration: UInt = 0
         private var contentRevision: UInt
         private var highlightedRevision: UInt?
@@ -323,6 +339,10 @@ struct EditorTextView: NSViewRepresentable {
             highlightWorkItem?.cancel()
             highlightOperation?.cancel()
             highlightQueue.cancelAllOperations()
+            delimiterMatchWorkItem?.cancel()
+            delimiterMatchOperation?.cancel()
+            delimiterMatchQueue.cancelAllOperations()
+            document.taskCoordinator.cancel(.delimiterMatch)
             rulerRefreshWorkItem?.cancel()
             rulerResizeRefreshWorkItem?.cancel()
             selectionVisibilityWorkItem?.cancel()
@@ -594,6 +614,7 @@ struct EditorTextView: NSViewRepresentable {
             guard isActive != newValue else { return }
             isActive = newValue
             guard newValue else {
+                cancelDelimiterMatch(clearHighlight: true, releaseSnapshot: true)
                 textView?.requestsFirstResponderWhenAttached = false
                 if let textView,
                    let window = textView.window,
@@ -606,6 +627,7 @@ struct EditorTextView: NSViewRepresentable {
             textView?.requestsFirstResponderWhenAttached = true
             updateLayout(wordWrap: wordWrap, force: true)
             scheduleHighlight(delay: 0)
+            scheduleDelimiterMatch(delay: 0)
             DispatchQueue.main.async { [weak self] in
                 guard let self, isActive, let textView, let window = textView.window else {
                     return
@@ -630,6 +652,7 @@ struct EditorTextView: NSViewRepresentable {
             clearFold()
             refreshRuler()
             updateCursor()
+            scheduleDelimiterMatch()
             scheduleSelectionVisibilitySync()
             scheduleModelSync()
             scheduleHighlight()
@@ -687,6 +710,10 @@ struct EditorTextView: NSViewRepresentable {
 
         func advanceContentRevision() {
             contentRevision &+= 1
+            delimiterSnapshot = nil
+            delimiterSnapshotRevision = nil
+            delimiterMatchingContext.reset()
+            cancelDelimiterMatch(clearHighlight: true)
         }
 
         private func scheduleSelectionVisibilitySync() {
@@ -832,6 +859,10 @@ struct EditorTextView: NSViewRepresentable {
             )
             contentRevision &+= 1
             syntaxHighlightContext.invalidate(after: safeRange.location)
+            delimiterMatchingContext.invalidate(after: safeRange.location)
+            delimiterSnapshot = nil
+            delimiterSnapshotRevision = nil
+            cancelDelimiterMatch(clearHighlight: true)
             if !isApplyingAutomatedEdit {
                 listNormalizationWorkItem?.cancel()
                 listNormalizationQueue.cancelAllOperations()
@@ -987,23 +1018,150 @@ struct EditorTextView: NSViewRepresentable {
 
         func textViewDidChangeSelection(_ notification: Notification) {
             guard !isApplyingExternalUpdate,
-                  !isRestoringOffscreenEdit,
-                  textView?.hasMarkedText() != true else { return }
+                  !isRestoringOffscreenEdit else { return }
+            guard textView?.hasMarkedText() != true else {
+                cancelDelimiterMatch(clearHighlight: true)
+                return
+            }
             textView?.needsDisplay = true
             invalidateEntireRuler(displayImmediately: true)
             updateCursor()
+            scheduleDelimiterMatch()
         }
 
         func selectionDidChangeDuringTracking() {
-            guard !isRestoringOffscreenEdit,
-                  textView?.hasMarkedText() != true else { return }
+            guard !isRestoringOffscreenEdit else { return }
+            guard textView?.hasMarkedText() != true else {
+                cancelDelimiterMatch(clearHighlight: true)
+                return
+            }
             textView?.needsDisplay = true
             invalidateEntireRuler(displayImmediately: true)
+            scheduleDelimiterMatch()
         }
 
         func synchronizeSelectionState() {
             DispatchQueue.main.async { [weak self] in
                 self?.updateCursor()
+                self?.scheduleDelimiterMatch(delay: 0)
+            }
+        }
+
+        func scheduleDelimiterMatch(delay: TimeInterval = 0.03) {
+            cancelDelimiterMatch(clearHighlight: true)
+            guard isActive,
+                  DelimiterMatchingService.supports(currentLanguage),
+                  let textView,
+                  !textView.hasMarkedText() else { return }
+            let selection = textView.selectedRange()
+            guard selection.length <= 1 else { return }
+
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self,
+                      isActive,
+                      !textView.hasMarkedText(),
+                      textView.selectedRange() == selection else { return }
+                delimiterMatchWorkItem = nil
+                let revision = contentRevision
+                let language = currentLanguage
+                let snapshot: String
+                if delimiterSnapshotRevision == revision,
+                   let cached = delimiterSnapshot {
+                    snapshot = cached
+                } else {
+                    snapshot = textView.string
+                    delimiterSnapshot = snapshot
+                    delimiterSnapshotRevision = revision
+                }
+                let taskGeneration = document.taskCoordinator.begin(.delimiterMatch)
+                let operation = BlockOperation()
+                operation.addExecutionBlock { [weak self, weak operation] in
+                    guard let self, let operation, !operation.isCancelled else { return }
+                    let match = DelimiterMatchingService.match(
+                        in: snapshot,
+                        selection: selection,
+                        language: language,
+                        revision: revision,
+                        context: delimiterMatchingContext,
+                        isCancelled: { operation.isCancelled }
+                    )
+                    guard !operation.isCancelled else { return }
+                    DispatchQueue.main.async { [weak self, weak operation] in
+                        guard let self, let operation, !operation.isCancelled,
+                              isActive,
+                              contentRevision == revision,
+                              currentLanguage == language,
+                              textView.selectedRange() == selection,
+                              document.taskCoordinator.isCurrent(
+                                taskGeneration,
+                                for: .delimiterMatch
+                              ) else { return }
+                        document.taskCoordinator.finish(
+                            .delimiterMatch,
+                            generation: taskGeneration
+                        )
+                        delimiterMatchOperation = nil
+                        if let match {
+                            applyDelimiterMatch(match)
+                        }
+                    }
+                }
+                delimiterMatchOperation = operation
+                document.taskCoordinator.attach(
+                    operation,
+                    kind: .delimiterMatch,
+                    generation: taskGeneration
+                )
+                delimiterMatchQueue.addOperation(operation)
+            }
+            delimiterMatchWorkItem = workItem
+            if delay <= 0 {
+                DispatchQueue.main.async(execute: workItem)
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+            }
+        }
+
+        private func applyDelimiterMatch(_ match: DelimiterMatchingService.Match) {
+            guard let layoutManager = textView?.layoutManager else { return }
+            clearDelimiterHighlight()
+            delimiterHighlightRanges = [match.openingRange, match.closingRange]
+            for range in delimiterHighlightRanges {
+                layoutManager.addTemporaryAttribute(
+                    .backgroundColor,
+                    value: NSColor.lacDelimiterMatchBackground,
+                    forCharacterRange: range
+                )
+            }
+        }
+
+        private func clearDelimiterHighlight() {
+            guard !delimiterHighlightRanges.isEmpty else { return }
+            if let layoutManager = textView?.layoutManager {
+                for range in delimiterHighlightRanges {
+                    layoutManager.removeTemporaryAttribute(
+                        .backgroundColor,
+                        forCharacterRange: range
+                    )
+                }
+            }
+            delimiterHighlightRanges.removeAll(keepingCapacity: true)
+        }
+
+        private func cancelDelimiterMatch(
+            clearHighlight: Bool,
+            releaseSnapshot: Bool = false
+        ) {
+            delimiterMatchWorkItem?.cancel()
+            delimiterMatchWorkItem = nil
+            delimiterMatchOperation?.cancel()
+            delimiterMatchOperation = nil
+            delimiterMatchQueue.cancelAllOperations()
+            document.taskCoordinator.cancel(.delimiterMatch)
+            if clearHighlight { clearDelimiterHighlight() }
+            if releaseSnapshot {
+                delimiterSnapshot = nil
+                delimiterSnapshotRevision = nil
             }
         }
 
@@ -1263,6 +1421,10 @@ struct EditorTextView: NSViewRepresentable {
 
         func resetSyntaxHighlightContext() {
             syntaxHighlightContext.reset()
+            delimiterMatchingContext.reset()
+            delimiterSnapshot = nil
+            delimiterSnapshotRevision = nil
+            cancelDelimiterMatch(clearHighlight: true)
         }
 
         func lineNumber(at location: Int) -> Int {
@@ -1512,6 +1674,7 @@ final class EditorSessionStore: ObservableObject {
         entry.coordinator.document.taskCoordinator.cancel(.replace)
         entry.coordinator.document.taskCoordinator.cancel(.json)
         entry.coordinator.document.taskCoordinator.cancel(.preview)
+        entry.coordinator.document.taskCoordinator.cancel(.delimiterMatch)
         os_signpost(
             .event,
             log: editorPerformanceLog,

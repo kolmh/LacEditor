@@ -14,15 +14,16 @@ private struct TabDropPosition: Equatable {
 struct TabBarView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var windowManager: WindowManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dropTargetPosition: TabDropPosition?
     @State private var canScrollLeading = false
     @State private var canScrollTrailing = false
     @State private var isAddButtonHovering = false
-    private let barHeight: CGFloat = 32
+    private let barHeight = LacEditorDesign.tabBarHeight
     private let minimumEndDropZoneWidth: CGFloat = 64
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 2) {
             ScrollViewReader { proxy in
                 GeometryReader { geometry in
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -97,8 +98,10 @@ struct TabBarView: View {
                                 )
                                 .id(document.id)
                                 .transition(.asymmetric(
-                                    insertion: .offset(x: 8).combined(with: .opacity),
-                                    removal: .scale(scale: 0.98).combined(with: .opacity)
+                                    insertion: reduceMotion
+                                        ? .opacity
+                                        : .offset(x: 6).combined(with: .opacity),
+                                    removal: .opacity
                                 ))
                                 .contextMenu {
                                     Button("关闭") { appState.close(document) }
@@ -154,7 +157,7 @@ struct TabBarView: View {
                             )
                         }
                         .animation(
-                            .smooth(duration: 0.2),
+                            reduceMotion ? nil : .smooth(duration: 0.18),
                             value: appState.documents.map(\.id)
                         )
                     }
@@ -177,12 +180,12 @@ struct TabBarView: View {
                                 .transition(.opacity)
                         }
                     }
-                    .animation(.easeOut(duration: 0.14), value: canScrollLeading)
-                    .animation(.easeOut(duration: 0.14), value: canScrollTrailing)
+                    .animation(reduceMotion ? nil : LacEditorDesign.hoverAnimation, value: canScrollLeading)
+                    .animation(reduceMotion ? nil : LacEditorDesign.hoverAnimation, value: canScrollTrailing)
                 }
                 .onChange(of: appState.selectedDocumentID) { _, selectedID in
                     guard let selectedID else { return }
-                    withAnimation(.easeOut(duration: 0.1)) {
+                    withAnimation(reduceMotion ? nil : LacEditorDesign.hoverAnimation) {
                         proxy.scrollTo(selectedID, anchor: .center)
                     }
                 }
@@ -195,14 +198,14 @@ struct TabBarView: View {
                     .font(.system(size: 11, weight: .medium))
                     .frame(width: 26, height: 26)
                     .background {
-                        Circle()
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
                             .fill(
                                 Color.primary.opacity(
-                                    isAddButtonHovering ? 0.09 : 0.035
+                                    isAddButtonHovering ? 0.075 : 0.028
                                 )
                             )
                     }
-                    .contentShape(Circle())
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .foregroundStyle(isAddButtonHovering ? .primary : .secondary)
@@ -212,7 +215,7 @@ struct TabBarView: View {
         }
         .coordinateSpace(name: "tabBar")
         .frame(height: barHeight)
-        .background(.ultraThinMaterial)
+        .background(Color(nsColor: .lacEditorBackground))
     }
 
     private func tabWidth(in availableWidth: CGFloat) -> CGFloat {
@@ -221,7 +224,7 @@ struct TabBarView: View {
             0,
             availableWidth - minimumEndDropZoneWidth
         ) / count
-        return min(220, max(132, flexibleWidth))
+        return min(208, max(128, flexibleWidth))
     }
 
     private func endDropZoneWidth(in availableWidth: CGFloat) -> CGFloat {
@@ -272,7 +275,7 @@ struct TabBarView: View {
             startPoint: isLeading ? .leading : .trailing,
             endPoint: isLeading ? .trailing : .leading
         )
-        .frame(width: 30)
+        .frame(width: LacEditorDesign.edgeFadeWidth)
         .allowsHitTesting(false)
     }
 }
@@ -291,6 +294,7 @@ private struct EditorTabView: View {
     let acceptDrop: (TabDropEdge) -> Bool
     let showsTrailingSeparator: Bool
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovering = false
 
     var body: some View {
@@ -311,59 +315,56 @@ private struct EditorTabView: View {
                 Circle()
                     .fill(Color.accentColor.opacity(0.82))
                     .frame(width: 6, height: 6)
-                    .opacity(document.isDirty ? 1 : 0)
+                    .opacity(document.isDirty && !isHovering ? 1 : 0)
                     .accessibilityLabel("未保存")
                     .accessibilityHidden(!document.isDirty)
-            }
-            .frame(width: 8, height: 18)
 
-            Button(action: close) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 9, weight: .semibold))
-                    .frame(width: 18, height: 18)
-                    .background {
-                        Circle()
-                            .fill(Color.primary.opacity(isHovering ? 0.06 : 0))
-                    }
-                    .contentShape(Rectangle())
+                Button(action: close) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .semibold))
+                        .frame(width: 18, height: 18)
+                        .background {
+                            Circle()
+                                .fill(Color.primary.opacity(0.06))
+                        }
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .opacity(isHovering ? 1 : 0)
+                .allowsHitTesting(isHovering)
+                .accessibilityHidden(!isHovering)
+                .stableHelp("关闭标签页", shortcut: "⌘W")
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .opacity(isHovering ? 1 : 0)
-            .allowsHitTesting(isHovering)
-            .accessibilityHidden(!isHovering)
-            .stableHelp("关闭标签页", shortcut: "⌘W")
+            .frame(width: 18, height: 18)
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
-        .frame(maxWidth: .infinity, minHeight: 32, maxHeight: 32)
+        .frame(
+            maxWidth: .infinity,
+            minHeight: LacEditorDesign.tabBarHeight,
+            maxHeight: LacEditorDesign.tabBarHeight
+        )
         .background {
             if isSelected {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                RoundedRectangle(cornerRadius: LacEditorDesign.compactCornerRadius, style: .continuous)
                     .fill(
                         colorScheme == .dark
-                            ? Color.white.opacity(0.075)
-                            : Color(nsColor: .controlBackgroundColor).opacity(0.92)
+                            ? Color.white.opacity(0.065)
+                            : Color(nsColor: .controlBackgroundColor).opacity(0.74)
                     )
                     .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        RoundedRectangle(cornerRadius: LacEditorDesign.compactCornerRadius, style: .continuous)
                             .stroke(
-                                Color(nsColor: .separatorColor).opacity(0.62),
-                                lineWidth: 0.65
+                                Color(nsColor: .separatorColor).opacity(0.46),
+                                lineWidth: 0.6
                             )
                     }
-                    .shadow(
-                        color: Color.black.opacity(
-                            colorScheme == .dark ? 0.16 : 0.06
-                        ),
-                        radius: 1.5,
-                        y: 0.5
-                    )
                     .padding(.horizontal, 2)
                     .padding(.vertical, 3)
             } else if isHovering {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.045))
+                RoundedRectangle(cornerRadius: LacEditorDesign.compactCornerRadius, style: .continuous)
+                    .fill(Color.primary.opacity(0.04))
                     .padding(.horizontal, 2)
                     .padding(.vertical, 3)
             }
@@ -372,7 +373,7 @@ private struct EditorTabView: View {
             if showsTrailingSeparator, !isHovering {
                 Rectangle()
                     .fill(Color(nsColor: .separatorColor).opacity(0.58))
-                    .frame(width: 1, height: 16)
+                    .frame(width: 1, height: 14)
             }
         }
         .overlay(alignment: .leading) {
@@ -416,10 +417,10 @@ private struct EditorTabView: View {
         .contentShape(Rectangle())
         .opacity(isDragging ? 0.48 : 1)
         .scaleEffect(isDragging ? 0.98 : 1)
-        .animation(.easeInOut(duration: 0.14), value: isSelected)
-        .animation(.easeOut(duration: 0.1), value: isHovering)
-        .animation(.easeOut(duration: 0.12), value: isDragging)
-        .animation(.easeOut(duration: 0.1), value: dropTargetEdge)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isSelected)
+        .animation(reduceMotion ? nil : LacEditorDesign.hoverAnimation, value: isHovering)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isDragging)
+        .animation(reduceMotion ? nil : LacEditorDesign.hoverAnimation, value: dropTargetEdge)
         .onTapGesture(perform: select)
         .onHover { isHovering = $0 }
     }

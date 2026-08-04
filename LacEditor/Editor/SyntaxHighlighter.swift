@@ -26,6 +26,7 @@ enum SyntaxHighlighter {
     }
 
     final class IncrementalContext {
+        fileprivate let codeLexicalContext = CodeLexicalScanner.IncrementalContext()
         private let lock = NSLock()
         private var language: EditorLanguage?
         private var revision: UInt?
@@ -37,12 +38,14 @@ enum SyntaxHighlighter {
         private var acceptsRevisionChange = false
 
         func reset() {
+            codeLexicalContext.reset()
             lock.lock()
             resetLocked()
             lock.unlock()
         }
 
         func invalidate(after location: Int) {
+            codeLexicalContext.invalidate(after: location)
             lock.lock()
             generation &+= 1
             checkpoints.removeAll { $0.location > max(0, location) }
@@ -241,7 +244,13 @@ enum SyntaxHighlighter {
         case .markdown:
             return markdownTokens(in: nsString, range: highlightRange)
         case .json:
-            return jsonTokens(in: nsString, range: highlightRange)
+            return jsonTokens(
+                in: string,
+                range: highlightRange,
+                context: context?.codeLexicalContext,
+                revision: revision,
+                isCancelled: isCancelled
+            )
         case .html:
             return htmlTokens(in: nsString, range: highlightRange)
         default:
@@ -250,25 +259,14 @@ enum SyntaxHighlighter {
                 language: language,
                 range: highlightRange
             )
-            if let configuration = lexicalConfiguration(for: language) {
-                if let context, let revision {
-                    result.append(contentsOf: incrementalLexicalTokens(
-                        in: nsString,
-                        range: highlightRange,
-                        language: language,
-                        revision: revision,
-                        configuration: configuration,
-                        context: context,
-                        isCancelled: isCancelled
-                    ))
-                } else {
-                    result.append(contentsOf: lexicalTokens(
-                        in: nsString,
-                        range: contextualRange(in: nsString, around: highlightRange),
-                        configuration: configuration
-                    ))
-                }
-            }
+            result.append(contentsOf: CodeLexicalScanner.tokens(
+                in: string,
+                language: language,
+                range: highlightRange,
+                context: context?.codeLexicalContext,
+                revision: revision,
+                isCancelled: isCancelled
+            ).map(syntaxToken))
             return result
         }
     }
@@ -305,26 +303,26 @@ enum SyntaxHighlighter {
     }
 
     private static func jsonTokens(
-        in string: NSString,
-        range: NSRange
+        in source: String,
+        range: NSRange,
+        context: CodeLexicalScanner.IncrementalContext?,
+        revision: UInt?,
+        isCancelled: () -> Bool
     ) -> [Token] {
+        let string = source as NSString
         var result = semanticTokens(
-            in: string as String,
+            in: source,
             language: .json,
             range: range
         )
-        let strings = lexicalTokens(
-            in: string,
-            range: contextualRange(in: string, around: range),
-            configuration: LexicalConfiguration(strings: [
-                StringDelimiter(
-                    value: "\"",
-                    allowsBackslashEscapes: true,
-                    allowsDoubledDelimiter: false,
-                    allowsLineBreaks: false
-                )
-            ])
-        )
+        let strings = CodeLexicalScanner.tokens(
+            in: source,
+            language: .json,
+            range: range,
+            context: context,
+            revision: revision,
+            isCancelled: isCancelled
+        ).map(syntaxToken)
         result.append(contentsOf: strings)
 
         for token in strings where token.kind == .string {
@@ -340,6 +338,15 @@ enum SyntaxHighlighter {
             }
         }
         return result
+    }
+
+    private static func syntaxToken(
+        _ token: CodeLexicalScanner.Token
+    ) -> Token {
+        Token(
+            range: token.range,
+            kind: token.kind == .comment ? .comment : .string
+        )
     }
 
     private static func htmlTokens(

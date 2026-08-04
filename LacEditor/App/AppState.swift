@@ -24,6 +24,7 @@ private func documentTaskSignpostName(
     case .metrics: "Metrics"
     case .save: "FileSave"
     case .listNormalization: "ListNormalization"
+    case .delimiterMatch: "DelimiterMatch"
     }
 }
 
@@ -79,6 +80,12 @@ final class EditorTextUpdateRequest {
     }
 }
 
+enum SidebarPresentation: Equatable {
+    case hidden
+    case preview
+    case pinned
+}
+
 @MainActor
 final class AppState: ObservableObject {
     @Published var documents: [EditorDocument] = []
@@ -92,10 +99,19 @@ final class AppState: ObservableObject {
         }
     }
     @Published private(set) var isSidebarPreviewVisible = false
+    private var isSidebarToggleHovered = false
+    private var isSidebarPreviewHovered = false
     @Published var workspaceURL: URL?
     @Published var fileTree: [FileTreeNode] = []
     @Published var isWordWrapEnabled = true
-    @Published var editorFontSize: CGFloat = 14
+    @Published var editorFontSize: CGFloat = 14 {
+        didSet {
+            UserDefaults.standard.set(
+                Double(editorFontSize),
+                forKey: "editorFontSize"
+            )
+        }
+    }
     @Published var isLineNumbersVisible: Bool {
         didSet {
             UserDefaults.standard.set(
@@ -148,6 +164,10 @@ final class AppState: ObservableObject {
         recentFiles: RecentFilesStore
     ) {
         self.recentFiles = recentFiles
+        let storedFontSize = UserDefaults.standard.object(
+            forKey: "editorFontSize"
+        ) as? Double
+        editorFontSize = min(max(CGFloat(storedFontSize ?? 14), 9), 32)
         isSidebarVisible = UserDefaults.standard.object(
             forKey: "isSidebarVisible"
         ) as? Bool ?? true
@@ -245,33 +265,70 @@ final class AppState: ObservableObject {
         return "\(document.isDirty ? "● " : "")\(document.displayName) — LacEditor"
     }
 
+    var sidebarPresentation: SidebarPresentation {
+        if isSidebarVisible { return .pinned }
+        if isSidebarPreviewVisible { return .preview }
+        return .hidden
+    }
+
     func toggleSidebar() {
         sidebarPreviewDismissWorkItem?.cancel()
+        sidebarPreviewDismissWorkItem = nil
+        isSidebarPreviewHovered = false
+        if isSidebarPreviewVisible {
+            isSidebarVisible = true
+            isSidebarPreviewVisible = false
+            return
+        }
         isSidebarVisible.toggle()
         isSidebarPreviewVisible = false
     }
 
-    func sidebarPreviewHoverChanged(_ isHovering: Bool) {
+    func sidebarToggleHoverChanged(_ isHovering: Bool) {
+        isSidebarToggleHovered = isHovering
         guard !isSidebarVisible else {
             isSidebarPreviewVisible = false
             return
         }
 
         sidebarPreviewDismissWorkItem?.cancel()
+        sidebarPreviewDismissWorkItem = nil
         if isHovering {
             withAnimation(.easeOut(duration: 0.16)) {
                 isSidebarPreviewVisible = true
             }
-        } else {
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, !self.isSidebarVisible else { return }
-                withAnimation(.easeOut(duration: 0.14)) {
-                    self.isSidebarPreviewVisible = false
-                }
-            }
-            sidebarPreviewDismissWorkItem = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: workItem)
+        } else if !isSidebarPreviewHovered {
+            scheduleSidebarPreviewDismissal()
         }
+    }
+
+    func sidebarPreviewHoverChanged(_ isHovering: Bool) {
+        guard !isSidebarVisible, isSidebarPreviewVisible else {
+            isSidebarPreviewHovered = false
+            return
+        }
+        isSidebarPreviewHovered = isHovering
+
+        sidebarPreviewDismissWorkItem?.cancel()
+        sidebarPreviewDismissWorkItem = nil
+        if !isHovering, !isSidebarToggleHovered {
+            scheduleSidebarPreviewDismissal()
+        }
+    }
+
+    private func scheduleSidebarPreviewDismissal() {
+        sidebarPreviewDismissWorkItem?.cancel()
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self,
+                  !self.isSidebarVisible,
+                  !self.isSidebarToggleHovered,
+                  !self.isSidebarPreviewHovered else { return }
+            withAnimation(.easeOut(duration: 0.14)) {
+                self.isSidebarPreviewVisible = false
+            }
+        }
+        sidebarPreviewDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: workItem)
     }
 
     func newDocument() {
@@ -780,6 +837,10 @@ final class AppState: ObservableObject {
 
     func resetFontSize() {
         editorFontSize = defaultFontSize
+    }
+
+    var isUsingDefaultFontSize: Bool {
+        editorFontSize == defaultFontSize
     }
 
     func updateRenamedFileReference(from oldURL: URL, to newURL: URL) {

@@ -41,6 +41,9 @@
 		A00000000000000000000124 /* UniformTypeIdentifiers.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000024 /* UniformTypeIdentifiers.framework */; };
 		A00000000000000000000125 /* LogicalLineIndex.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000025 /* LogicalLineIndex.swift */; };
 		A00000000000000000000126 /* FoldLayoutManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000026 /* FoldLayoutManager.swift */; };
+		A00000000000000000000127 /* LacEditorDesign.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000027 /* LacEditorDesign.swift */; };
+		A00000000000000000000128 /* CodeLexicalScanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000028 /* CodeLexicalScanner.swift */; };
+		A00000000000000000000129 /* DelimiterMatchingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* DelimiterMatchingService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -79,6 +82,9 @@
 		A00000000000000000000024 /* UniformTypeIdentifiers.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UniformTypeIdentifiers.framework; path = System/Library/Frameworks/UniformTypeIdentifiers.framework; sourceTree = SDKROOT; };
 		A00000000000000000000025 /* LogicalLineIndex.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogicalLineIndex.swift; sourceTree = "<group>"; };
 		A00000000000000000000026 /* FoldLayoutManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FoldLayoutManager.swift; sourceTree = "<group>"; };
+		A00000000000000000000027 /* LacEditorDesign.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LacEditorDesign.swift; sourceTree = "<group>"; };
+		A00000000000000000000028 /* CodeLexicalScanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodeLexicalScanner.swift; sourceTree = "<group>"; };
+		A00000000000000000000029 /* DelimiterMatchingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DelimiterMatchingService.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -122,9 +128,9 @@
 		A00000000000000000000302 /* App */ = {isa = PBXGroup; children = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A0000000000000000000001B); path = App; sourceTree = "<group>"; };
 		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005, A00000000000000000000006); path = Models; sourceTree = "<group>"; };
 		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000008, A00000000000000000000009, A00000000000000000000017); path = Services; sourceTree = "<group>"; };
-		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
+		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A00000000000000000000028, A00000000000000000000029, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
 		A00000000000000000000306 /* Preview */ = {isa = PBXGroup; children = (A0000000000000000000000F, A00000000000000000000010); path = Preview; sourceTree = "<group>"; };
-		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000014, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
+		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000027, A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000014, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
 		A00000000000000000000309 /* Frameworks */ = {isa = PBXGroup; children = (A00000000000000000000021, A00000000000000000000022, A00000000000000000000023, A00000000000000000000024); name = Frameworks; sourceTree = "<group>"; };
 		A0000000000000000000030A /* Products */ = {isa = PBXGroup; children = (A00000000000000000000020); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
@@ -199,6 +205,9 @@
 				A0000000000000000000011B,
 				A00000000000000000000125,
 				A00000000000000000000126,
+				A00000000000000000000127,
+				A00000000000000000000128,
+				A00000000000000000000129,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -214,7 +223,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -223,7 +232,7 @@
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -239,7 +248,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -248,7 +257,7 @@
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.4.0;
+				MARKETING_VERSION = 0.5.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;
