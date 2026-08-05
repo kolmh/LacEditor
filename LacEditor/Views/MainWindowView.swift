@@ -180,7 +180,8 @@ private struct DocumentEditorPane: View {
             wordWrap: wordWrap,
             showsLineNumbers: showsLineNumbers,
             topInset: editorTopInset,
-            isActive: true
+            isActive: true,
+            requestTextTransformation: appState.presentTextTransformation
         )
     }
 }

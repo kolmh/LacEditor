@@ -15,6 +15,7 @@ struct EditorTextView: NSViewRepresentable {
     let showsLineNumbers: Bool
     let topInset: CGFloat
     let isActive: Bool
+    let requestTextTransformation: (TextTransformationOperation) -> Void
 
     func makeCoordinator() -> Coordinator {
         sessionStore.coordinator(for: document)
@@ -118,6 +119,7 @@ struct EditorTextView: NSViewRepresentable {
         textView.selectionTrackingHandler = { [weak coordinator = context.coordinator] in
             coordinator?.selectionDidChangeDuringTracking()
         }
+        textView.textTransformationHandler = requestTextTransformation
         ruler.lineNumberProvider = { [weak coordinator = context.coordinator] location in
             coordinator?.lineNumber(at: location) ?? 1
         }
@@ -150,6 +152,7 @@ struct EditorTextView: NSViewRepresentable {
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
         guard let textView = context.coordinator.textView else { return }
+        textView.textTransformationHandler = requestTextTransformation
         let documentChanged = context.coordinator.document.id != document.id
         let fontChanged = context.coordinator.currentFontSize != fontSize
         let languageChanged = context.coordinator.currentLanguage != document.language
@@ -262,6 +265,7 @@ struct EditorTextView: NSViewRepresentable {
         private var rulerResizeRefreshWorkItem: DispatchWorkItem?
         private var rulerRefreshNeedsLayout = false
         private var selectionVisibilityWorkItem: DispatchWorkItem?
+        private var textCodecSuggestionWorkItem: DispatchWorkItem?
         private var modelSyncWorkItem: DispatchWorkItem?
         private var layoutPrefetchWorkItem: DispatchWorkItem?
         private var listNormalizationWorkItem: DispatchWorkItem?
@@ -346,6 +350,7 @@ struct EditorTextView: NSViewRepresentable {
             rulerRefreshWorkItem?.cancel()
             rulerResizeRefreshWorkItem?.cancel()
             selectionVisibilityWorkItem?.cancel()
+            textCodecSuggestionWorkItem?.cancel()
             observerTokens.forEach(NotificationCenter.default.removeObserver)
         }
 
@@ -427,6 +432,27 @@ struct EditorTextView: NSViewRepresentable {
                       let textView else { return }
                 apply(request, to: textView)
             })
+            observerTokens.append(NotificationCenter.default.addObserver(
+                forName: EditorCommandNotification.extractTextSelection,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let request = notification.object as? EditorTextExtractionRequest,
+                      request.documentID == document.id else { return }
+                extractSelection(for: request)
+            })
+            observerTokens.append(NotificationCenter.default.addObserver(
+                forName: EditorCommandNotification.applyRangeReplacement,
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                guard let self,
+                      let request = notification.object as? EditorRangeReplacementRequest,
+                      request.documentID == document.id,
+                      let textView else { return }
+                apply(request, to: textView)
+            })
         }
 
         func attachLiveTextProvider() {
@@ -462,6 +488,72 @@ struct EditorTextView: NSViewRepresentable {
             textView.didChangeText()
             textView.setSelectedRange(request.selectionRange)
             textView.scrollRangeToVisible(request.selectionRange)
+            textView.undoManager?.setActionName(request.actionName)
+        }
+
+        private func extractSelection(for request: EditorTextExtractionRequest) {
+            guard isActive,
+                  let textView,
+                  let text = textView.textStorage?.mutableString,
+                  let candidate = TextCodecService.candidate(
+                      in: text,
+                      selection: textView.selectedRange(),
+                      allowsTokenAtCaret: request.allowsTokenAtCaret,
+                      maximumLength: request.allowsTokenAtCaret
+                          ? TextCodecService.automaticDetectionLimit
+                          : nil
+                  ) else { return }
+            request.result = EditorTextSelectionSnapshot(
+                documentID: document.id,
+                range: candidate.range,
+                text: candidate.text,
+                editorRevision: contentRevision,
+                wasExplicitSelection: textView.selectedRange().length > 0
+            )
+        }
+
+        private func apply(
+            _ request: EditorRangeReplacementRequest,
+            to textView: LacTextView
+        ) {
+            guard request.expectedEditorRevision == contentRevision else {
+                request.failureMessage = "编辑内容已变化，请重新执行转换"
+                return
+            }
+            guard let storage = textView.textStorage,
+                  request.range.location != NSNotFound,
+                  NSMaxRange(request.range) <= storage.length,
+                  storage.mutableString.substring(with: request.range)
+                    == request.originalText else {
+                request.failureMessage = "原文位置已变化，请重新执行转换"
+                return
+            }
+            guard request.originalText != request.replacementText else {
+                request.failureMessage = "转换结果与原文相同"
+                return
+            }
+
+            isApplyingAutomatedEdit = true
+            defer { isApplyingAutomatedEdit = false }
+            guard textView.shouldChangeText(
+                in: request.range,
+                replacementString: request.replacementText
+            ) else {
+                request.failureMessage = "当前文本无法修改"
+                return
+            }
+            request.wasHandled = true
+            storage.replaceCharacters(
+                in: request.range,
+                with: request.replacementText
+            )
+            textView.didChangeText()
+            let replacementRange = NSRange(
+                location: request.range.location,
+                length: (request.replacementText as NSString).length
+            )
+            textView.setSelectedRange(replacementRange)
+            textView.scrollRangeToVisible(replacementRange)
             textView.undoManager?.setActionName(request.actionName)
         }
 
@@ -614,6 +706,8 @@ struct EditorTextView: NSViewRepresentable {
             guard isActive != newValue else { return }
             isActive = newValue
             guard newValue else {
+                textCodecSuggestionWorkItem?.cancel()
+                document.textCodecSuggestionTitle = nil
                 cancelDelimiterMatch(clearHighlight: true, releaseSnapshot: true)
                 textView?.requestsFirstResponderWhenAttached = false
                 if let textView,
@@ -628,6 +722,7 @@ struct EditorTextView: NSViewRepresentable {
             updateLayout(wordWrap: wordWrap, force: true)
             scheduleHighlight(delay: 0)
             scheduleDelimiterMatch(delay: 0)
+            scheduleTextCodecSuggestion(delay: 0.18)
             DispatchQueue.main.async { [weak self] in
                 guard let self, isActive, let textView, let window = textView.window else {
                     return
@@ -656,6 +751,7 @@ struct EditorTextView: NSViewRepresentable {
             scheduleSelectionVisibilitySync()
             scheduleModelSync()
             scheduleHighlight()
+            scheduleTextCodecSuggestion()
             if let location = pendingListNormalizationLocation {
                 pendingListNormalizationLocation = nil
                 scheduleOrderedListNormalization(around: location)
@@ -1027,6 +1123,7 @@ struct EditorTextView: NSViewRepresentable {
             invalidateEntireRuler(displayImmediately: true)
             updateCursor()
             scheduleDelimiterMatch()
+            scheduleTextCodecSuggestion()
         }
 
         func selectionDidChangeDuringTracking() {
@@ -1038,13 +1135,51 @@ struct EditorTextView: NSViewRepresentable {
             textView?.needsDisplay = true
             invalidateEntireRuler(displayImmediately: true)
             scheduleDelimiterMatch()
+            scheduleTextCodecSuggestion()
         }
 
         func synchronizeSelectionState() {
             DispatchQueue.main.async { [weak self] in
                 self?.updateCursor()
                 self?.scheduleDelimiterMatch(delay: 0)
+                self?.scheduleTextCodecSuggestion(delay: 0.18)
             }
+        }
+
+        private func scheduleTextCodecSuggestion(delay: TimeInterval = 0.18) {
+            textCodecSuggestionWorkItem?.cancel()
+            guard isActive,
+                  let textView,
+                  !textView.hasMarkedText(),
+                  textView.textStorage != nil else {
+                document.textCodecSuggestionTitle = nil
+                return
+            }
+            let selection = textView.selectedRange()
+            let revision = contentRevision
+            document.textCodecSuggestionTitle = nil
+            let workItem = DispatchWorkItem { [weak self, weak textView] in
+                guard let self, isActive,
+                      let textView,
+                      let currentText = textView.textStorage?.mutableString,
+                      textView.selectedRange() == selection,
+                      contentRevision == revision,
+                      let candidate = TextCodecService.candidate(
+                          in: currentText,
+                          selection: selection,
+                          allowsTokenAtCaret: true,
+                          maximumLength: TextCodecService.automaticDetectionLimit
+                      ),
+                      let detection = TextCodecService.detect(
+                          in: candidate.text,
+                          allowsBase64: selection.length > 0
+                      ) else {
+                    return
+                }
+                document.textCodecSuggestionTitle = detection.suggestionTitle
+            }
+            textCodecSuggestionWorkItem = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
         }
 
         func scheduleDelimiterMatch(delay: TimeInterval = 0.03) {

@@ -70,6 +70,152 @@ do {
     fatalError("Verification failed: JSON formatter threw \(error)")
 }
 
+do {
+    let urlSource = "你好 world?name=LacEditor&enabled=true"
+    let urlEncoded = try TextCodecService.transform(
+        urlSource,
+        operation: .urlEncodeComponent
+    )
+    require(
+        urlEncoded == "%E4%BD%A0%E5%A5%BD%20world%3Fname%3DLacEditor%26enabled%3Dtrue",
+        "URL component encoding uses UTF-8 and preserves only unreserved characters"
+    )
+    let urlDecoded = try TextCodecService.transform(urlEncoded, operation: .urlDecode)
+    require(urlDecoded == urlSource, "URL component round trip")
+    let standardPlusDecoded = try TextCodecService.transform(
+        "a+b%20c",
+        operation: .urlDecode
+    )
+    require(
+        standardPlusDecoded == "a+b c",
+        "standard URL decoding preserves plus"
+    )
+    let formPlusDecoded = try TextCodecService.transform(
+        "a+b%20c",
+        operation: .formURLDecode
+    )
+    require(
+        formPlusDecoded == "a b c",
+        "form URL decoding maps plus to space"
+    )
+
+    let base64 = try TextCodecService.transform("LacEditor 中文", operation: .base64Encode)
+    let base64Decoded = try TextCodecService.transform(base64, operation: .base64Decode)
+    require(base64Decoded == "LacEditor 中文", "Base64 UTF-8 round trip")
+    let base64URL = try TextCodecService.transform("路径?/+", operation: .base64URLEncode)
+    require(!base64URL.contains("="), "Base64URL omits padding")
+    let base64URLDecoded = try TextCodecService.transform(
+        base64URL,
+        operation: .base64URLDecode
+    )
+    require(base64URLDecoded == "路径?/+", "Base64URL UTF-8 round trip")
+
+    let htmlSource = #"<a title="Lac & Editor">©</a>"#
+    let htmlEncoded = try TextCodecService.transform(htmlSource, operation: .htmlEncode)
+    require(
+        htmlEncoded == "&lt;a title=&quot;Lac &amp; Editor&quot;&gt;©&lt;/a&gt;",
+        "HTML entity encoding"
+    )
+    let htmlDecoded = try TextCodecService.transform(htmlEncoded, operation: .htmlDecode)
+    require(htmlDecoded == htmlSource, "HTML entity round trip")
+    let numericEntities = try TextCodecService.transform(
+        "&#x4F60;&#22909; &copy;",
+        operation: .htmlDecode
+    )
+    require(
+        numericEntities == "你好 ©",
+        "numeric and common named HTML entities"
+    )
+
+    let unicodeSource = "你好 😀\n\t\"\\"
+    let unicodeEncoded = try TextCodecService.transform(
+        unicodeSource,
+        operation: .unicodeEncode
+    )
+    require(unicodeEncoded.contains(#"\u4F60\u597D"#), "Unicode BMP escaping")
+    require(unicodeEncoded.contains(#"\uD83D\uDE00"#), "Unicode surrogate escaping")
+    let unicodeDecoded = try TextCodecService.transform(
+        unicodeEncoded,
+        operation: .unicodeDecode
+    )
+    require(unicodeDecoded == unicodeSource, "Unicode and JSON escape round trip")
+    let bracedUnicode = try TextCodecService.transform(
+        #"\u{1F600}"#,
+        operation: .unicodeDecode
+    )
+    require(bracedUnicode == "😀", "braced Unicode escape")
+
+    require(
+        TextCodecService.detect(in: "hello%20world")?.kind == .url,
+        "smart URL detection"
+    )
+    require(
+        TextCodecService.detect(in: "SGVsbG8gTGFjRWRpdG9y")?.kind == .base64,
+        "smart Base64 detection"
+    )
+    require(
+        TextCodecService.detect(
+            in: "SGVsbG8gTGFjRWRpdG9y",
+            allowsBase64: false
+        ) == nil,
+        "Base64 is only suggested for an explicit selection"
+    )
+    require(
+        TextCodecService.detect(in: #"\u4F60\u597D"#)?.kind == .unicodeEscape,
+        "smart Unicode detection"
+    )
+    require(
+        TextCodecService.detect(in: "ordinaryText") == nil,
+        "ordinary text is not misdetected"
+    )
+
+    let candidateSource = "prefix hello%20world suffix" as NSString
+    let candidateLocation = candidateSource.range(of: "%20").location
+    let candidate = TextCodecService.candidate(
+        in: candidateSource,
+        selection: NSRange(location: candidateLocation, length: 0),
+        allowsTokenAtCaret: true,
+        maximumLength: TextCodecService.automaticDetectionLimit
+    )
+    require(candidate?.text == "hello%20world", "caret token extraction")
+    let oversizedToken = NSString(
+        string: String(
+            repeating: "A",
+            count: TextCodecService.automaticDetectionLimit + 1
+        )
+    )
+    require(
+        TextCodecService.candidate(
+            in: oversizedToken,
+            selection: NSRange(location: oversizedToken.length / 2, length: 0),
+            allowsTokenAtCaret: true,
+            maximumLength: TextCodecService.automaticDetectionLimit
+        ) == nil,
+        "automatic detection rejects oversized tokens without scanning beyond its limit"
+    )
+
+    do {
+        _ = try TextCodecService.transform("broken%2", operation: .urlDecode)
+        fatalError("Verification failed: invalid URL encoding was accepted")
+    } catch let error as TextCodecError {
+        require(error == .invalidPercentEncoding, "invalid URL encoding error")
+    }
+    do {
+        _ = try TextCodecService.transform("/w==", operation: .base64Decode)
+        fatalError("Verification failed: binary Base64 was accepted as text")
+    } catch let error as TextCodecError {
+        require(error == .nonTextBase64, "binary Base64 text guard")
+    }
+    do {
+        _ = try TextCodecService.transform(#"\uD83D"#, operation: .unicodeDecode)
+        fatalError("Verification failed: unmatched surrogate was accepted")
+    } catch {
+        require(true, "unmatched Unicode surrogate rejected")
+    }
+} catch {
+    fatalError("Verification failed: text codec threw \(error)")
+}
+
 let markdown = """
 # 标题
 

@@ -18,6 +18,18 @@ struct StatusBarView: View {
             if document.isLargeFileMode {
                 performanceMenu
             }
+            if let suggestion = document.textCodecSuggestionTitle {
+                Button {
+                    appState.presentTextTransformation(.smartDecode)
+                } label: {
+                    Label(suggestion, systemImage: "arrow.left.arrow.right")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .fixedSize()
+                .help("预览解码结果")
+            }
             if let message = document.statusMessage {
                 Text(message)
                     .font(.system(size: 11))

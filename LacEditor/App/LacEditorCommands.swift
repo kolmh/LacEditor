@@ -124,6 +124,38 @@ struct LacEditorCommands: Commands {
                 .keyboardShortcut("g", modifiers: [.command, .shift])
                 .disabled(appState == nil)
             Divider()
+            Menu {
+                Button {
+                    appState?.presentTextTransformation(.smartDecode)
+                } label: {
+                    Label("智能解码", systemImage: "wand.and.stars")
+                }
+                .keyboardShortcut("d", modifiers: [.control, .option])
+                Divider()
+                Menu("URL") {
+                    transformationButton(.urlEncodeComponent)
+                    transformationButton(.urlDecode)
+                    transformationButton(.formURLDecode)
+                }
+                Menu("Base64") {
+                    transformationButton(.base64Encode)
+                    transformationButton(.base64Decode)
+                    transformationButton(.base64URLEncode)
+                    transformationButton(.base64URLDecode)
+                }
+                Menu("HTML 实体") {
+                    transformationButton(.htmlEncode)
+                    transformationButton(.htmlDecode)
+                }
+                Menu("Unicode/JSON 转义") {
+                    transformationButton(.unicodeEncode)
+                    transformationButton(.unicodeDecode)
+                }
+            } label: {
+                Label("编码与解码", systemImage: "arrow.left.arrow.right")
+            }
+            .disabled(appState == nil)
+            Divider()
             Button {
                 appState?.formatJSON()
             } label: {
@@ -328,6 +360,14 @@ struct LacEditorCommands: Commands {
             appState?.toggleLargeFileFeature(feature)
         } label: {
             Label(title, systemImage: enabled ? "checkmark" : "minus")
+        }
+    }
+
+    private func transformationButton(
+        _ operation: TextTransformationOperation
+    ) -> some View {
+        Button(operation.title) {
+            appState?.presentTextTransformation(operation)
         }
     }
 

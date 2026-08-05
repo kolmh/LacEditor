@@ -70,6 +70,7 @@ final class DocumentTaskCoordinator: @unchecked Sendable {
         case save
         case listNormalization
         case delimiterMatch
+        case textTransformation
     }
 
     private let lock = NSLock()
@@ -146,6 +147,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     @Published var cursorColumn = 1
     @Published var selectionRange = NSRange(location: 0, length: 0)
     @Published var statusMessage: String?
+    @Published var textCodecSuggestionTitle: String?
     @Published var isPreviewVisible: Bool
     @Published var performanceProfile: DocumentPerformanceProfile
     @Published var featureOverrides = DocumentFeatureOverrides()

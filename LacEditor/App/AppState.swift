@@ -25,6 +25,7 @@ private func documentTaskSignpostName(
     case .save: "FileSave"
     case .listNormalization: "ListNormalization"
     case .delimiterMatch: "DelimiterMatch"
+    case .textTransformation: "TextTransformation"
     }
 }
 
@@ -50,6 +51,12 @@ enum EditorCommandNotification {
     static let undo = Notification.Name("LacEditor.undo")
     static let redo = Notification.Name("LacEditor.redo")
     static let applyTextUpdate = Notification.Name("LacEditor.applyTextUpdate")
+    static let extractTextSelection = Notification.Name(
+        "LacEditor.extractTextSelection"
+    )
+    static let applyRangeReplacement = Notification.Name(
+        "LacEditor.applyRangeReplacement"
+    )
     static let documentContentDidChange = Notification.Name(
         "LacEditor.documentContentDidChange"
     )
@@ -76,6 +83,52 @@ final class EditorTextUpdateRequest {
         self.documentID = documentID
         self.text = text
         self.selectionRange = selectionRange
+        self.actionName = actionName
+    }
+}
+
+struct EditorTextSelectionSnapshot {
+    let documentID: UUID
+    let range: NSRange
+    let text: String
+    let editorRevision: UInt
+    let wasExplicitSelection: Bool
+}
+
+final class EditorTextExtractionRequest {
+    let documentID: UUID
+    let allowsTokenAtCaret: Bool
+    var result: EditorTextSelectionSnapshot?
+
+    init(documentID: UUID, allowsTokenAtCaret: Bool) {
+        self.documentID = documentID
+        self.allowsTokenAtCaret = allowsTokenAtCaret
+    }
+}
+
+final class EditorRangeReplacementRequest {
+    let documentID: UUID
+    let range: NSRange
+    let originalText: String
+    let replacementText: String
+    let expectedEditorRevision: UInt
+    let actionName: String
+    var wasHandled = false
+    var failureMessage: String?
+
+    init(
+        documentID: UUID,
+        range: NSRange,
+        originalText: String,
+        replacementText: String,
+        expectedEditorRevision: UInt,
+        actionName: String
+    ) {
+        self.documentID = documentID
+        self.range = range
+        self.originalText = originalText
+        self.replacementText = replacementText
+        self.expectedEditorRevision = expectedEditorRevision
         self.actionName = actionName
     }
 }
@@ -134,8 +187,10 @@ final class AppState: ObservableObject {
 
     let recentFiles: RecentFilesStore
     let findReplace = FindReplaceState()
+    let textTransformation = TextTransformationPreviewState()
     weak var hostWindow: NSWindow?
     private var findReplaceWindowController: FindReplaceWindowController?
+    private var textTransformationWindowController: TextTransformationWindowController?
     private let fileService = FileService()
     private let fileReadQueue = DispatchQueue(
         label: "com.laceditor.file-reading",
@@ -199,6 +254,7 @@ final class AppState: ObservableObject {
                 document.taskCoordinator.cancel(.replace)
                 document.taskCoordinator.cancel(.json)
                 document.taskCoordinator.cancel(.listNormalization)
+                document.taskCoordinator.cancel(.textTransformation)
                 if document.statusMessage?.hasPrefix("正在格式化") == true
                     || document.statusMessage?.hasPrefix("正在压缩") == true {
                     document.statusMessage = "内容已变化，JSON 操作已取消"
@@ -207,6 +263,7 @@ final class AppState: ObservableObject {
                     self.findReplace.isWorking = false
                     self.findReplace.message = "内容已变化，任务已取消"
                 }
+                self.textTransformation.invalidate(documentID: documentID)
             }
         }
     }
@@ -684,6 +741,116 @@ final class AppState: ObservableObject {
         }
     }
 
+    func presentTextTransformation(_ operation: TextTransformationOperation) {
+        guard let document = selectedDocument else { return }
+        let extraction = EditorTextExtractionRequest(
+            documentID: document.id,
+            allowsTokenAtCaret: operation == .smartDecode
+        )
+        NotificationCenter.default.post(
+            name: EditorCommandNotification.extractTextSelection,
+            object: extraction
+        )
+        guard let snapshot = extraction.result else {
+            document.statusMessage = operation == .smartDecode
+                ? "请将光标放在编码内容中，或先选择文本"
+                : "请先选择需要转换的文本"
+            return
+        }
+
+        document.statusMessage = "正在转换文本…"
+        performDocumentTask(document, kind: .textTransformation) {
+            Result { () -> TextTransformationPreview in
+                let detected = operation == .smartDecode
+                    ? TextCodecService.detect(
+                        in: snapshot.text,
+                        allowsBase64: snapshot.wasExplicitSelection
+                    )
+                    : nil
+                if operation == .smartDecode, detected == nil {
+                    throw TextCodecError.noDetectedEncoding
+                }
+                let resolvedOperation = detected?.operation ?? operation
+                let output: String
+                if let detected {
+                    output = detected.output
+                } else {
+                    output = try TextCodecService.transform(
+                        snapshot.text,
+                        operation: resolvedOperation
+                    )
+                }
+                return TextTransformationPreview(
+                    documentID: document.id,
+                    range: snapshot.range,
+                    input: snapshot.text,
+                    output: output,
+                    editorRevision: snapshot.editorRevision,
+                    operation: resolvedOperation,
+                    detectedKind: detected?.kind
+                )
+            }
+        } completion: { [weak self, weak document] result in
+            guard let self, let document,
+                  self.documents.contains(where: { $0.id == document.id }) else { return }
+            switch result {
+            case let .success(preview):
+                document.statusMessage = nil
+                self.textTransformation.present(preview)
+                let controller = self.textTransformationWindowController
+                    ?? TextTransformationWindowController(appState: self)
+                self.textTransformationWindowController = controller
+                if let hostWindow = self.hostWindow {
+                    controller.present(relativeTo: hostWindow)
+                }
+            case let .failure(error):
+                document.statusMessage = error.localizedDescription
+            }
+        }
+    }
+
+    func applyTextTransformationPreview() {
+        guard textTransformation.canReplace,
+              let preview = textTransformation.preview else {
+            textTransformation.message = "编辑内容已变化，请重新执行转换"
+            return
+        }
+        guard let document = documents.first(where: { $0.id == preview.documentID }) else {
+            textTransformation.message = "原文标签已关闭，请重新执行转换"
+            return
+        }
+        let request = EditorRangeReplacementRequest(
+            documentID: preview.documentID,
+            range: preview.range,
+            originalText: preview.input,
+            replacementText: preview.output,
+            expectedEditorRevision: preview.editorRevision,
+            actionName: preview.operation.actionName
+        )
+        NotificationCenter.default.post(
+            name: EditorCommandNotification.applyRangeReplacement,
+            object: request
+        )
+        guard request.wasHandled else {
+            textTransformation.message = request.failureMessage
+                ?? "编辑内容已变化，请重新执行转换"
+            return
+        }
+        document.statusMessage = "已完成 \(preview.operation.title)"
+        dismissTextTransformation()
+    }
+
+    func copyTextTransformationResult() {
+        guard let output = textTransformation.preview?.output else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(output, forType: .string)
+        textTransformation.message = "结果已复制"
+    }
+
+    func dismissTextTransformation() {
+        textTransformationWindowController?.dismiss()
+    }
+
     func presentFindReplace(mode: FindReplaceMode) {
         findReplace.mode = mode
         findReplace.message = nil
@@ -872,6 +1039,8 @@ final class AppState: ObservableObject {
         document.taskCoordinator.cancel(.json)
         document.taskCoordinator.cancel(.preview)
         document.taskCoordinator.cancel(.metrics)
+        document.taskCoordinator.cancel(.textTransformation)
+        textTransformation.invalidate(documentID: document.id)
         documentCancellables.removeValue(forKey: document.id)?.cancel()
     }
 

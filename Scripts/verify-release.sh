@@ -43,6 +43,7 @@ swiftc \
     LacEditor/Models/EditorDocument.swift \
     LacEditor/Services/JSONFormatter.swift \
     LacEditor/Services/TextSearchService.swift \
+    LacEditor/Services/TextCodecService.swift \
     LacEditor/Editor/FoldService.swift \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
@@ -63,6 +64,7 @@ swiftc \
 
 swiftc \
     LacEditor/Editor/ListContinuationService.swift \
+    LacEditor/Services/TextCodecService.swift \
     LacEditor/Editor/LacTextView.swift \
     Verification/EditorInteractionVerification.swift \
     -o .build/editor-interaction-verification

@@ -2,7 +2,7 @@
 
 LacEditor 是一款面向 macOS 14 及以上版本的轻量原生文本编辑器。工程使用 SwiftUI 构建界面，以 AppKit `NSTextView` 提供编辑能力，并使用 WebKit 在本地呈现 Markdown 预览。应用不需要登录、云同步或网络权限，也不采集用户内容。
 
-当前版本：`0.4.0 (4)`
+当前版本：`0.6.0 (6)`
 
 ## 构建
 
@@ -25,6 +25,7 @@ swiftc \
   LacEditor/Models/EditorDocument.swift \
   LacEditor/Services/JSONFormatter.swift \
   LacEditor/Services/TextSearchService.swift \
+  LacEditor/Services/TextCodecService.swift \
   LacEditor/Editor/FoldService.swift \
   LacEditor/Editor/ListContinuationService.swift \
   LacEditor/Editor/LogicalLineIndex.swift \
@@ -70,7 +71,7 @@ Bundle ID 隔离的 UI 验收 App，避免污染正式应用的最近文件和�
 
 - `App`：应用生命周期、窗口管理、窗口级状态、原生菜单和快捷键。
 - `Models`：编辑文档、语言模式和文件树模型。
-- `Services`：文件读写、编码选择、最近文件和 JSON 工具。
+- `Services`：文件读写、编码选择、最近文件、JSON 工具和文本编解码。
 - `Editor`：AppKit 编辑器、行号、当前行、列表续写、缩进、折叠与语法高亮。
 - `Preview`：本地 Markdown 转换和防抖 WebKit 预览。
 - `Views`：原生窗口工具栏、可拖动标签栏、最近文件侧边栏、编辑工作区、状态栏和设置。
@@ -124,6 +125,9 @@ Bundle ID 隔离的 UI 验收 App，避免污染正式应用的最近文件和�
   C/C++ 和 SQL 语法高亮；大文件仅高亮可视区域及缓冲区。
 - Markdown 左右分栏实时预览，支持标题、列表、引用、链接、代码和表格；有序列表在嵌套项目后保留显式序号。
 - JSON 格式化、压缩，以及尽可能包含行列位置的错误信息。
+- URL、Base64/Base64URL、常用 HTML 实体和 Unicode/JSON 转义的编码解码；选区可智能
+  识别全部类型，未选择时检测光标所在 URL、HTML 实体和 Unicode 转义，结果通过非模态
+  双栏窗口预览后再复制或替换。
 - Codex 风格的最近文件抽屉，收起后可从工具栏悬停临时展开；最近文件支持新窗口打开、
   重命名、Finder 定位和单项移除。
 - 可拖动与拆分窗口的标签、工具栏撤销/重做、语言菜单、状态栏、深浅色主题和系统原生快捷键。

@@ -43,6 +43,7 @@ final class LacTextView: NSTextView {
     var currentLineColor: NSColor = .lacCurrentLineBackground
     var selectionTrackingHandler: (() -> Void)?
     var requestsFirstResponderWhenAttached = false
+    var textTransformationHandler: ((TextTransformationOperation) -> Void)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -119,6 +120,96 @@ final class LacTextView: NSTextView {
             lineRect.size.width = bounds.width
             lineRect.intersection(rect).fill()
         }
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let menu = super.menu(for: event) ?? NSMenu()
+        if !menu.items.isEmpty { menu.addItem(.separator()) }
+
+        let root = NSMenuItem(
+            title: "编码与解码",
+            action: nil,
+            keyEquivalent: ""
+        )
+        root.image = NSImage(
+            systemSymbolName: "arrow.left.arrow.right",
+            accessibilityDescription: "编码与解码"
+        )
+        let submenu = NSMenu(title: "编码与解码")
+        if let text = textStorage?.mutableString,
+           let candidate = TextCodecService.candidate(
+               in: text,
+               selection: selectedRange(),
+               allowsTokenAtCaret: true,
+               maximumLength: TextCodecService.automaticDetectionLimit
+           ),
+           let detection = TextCodecService.detect(
+               in: candidate.text,
+               allowsBase64: selectedRange().length > 0
+           ) {
+            submenu.addItem(transformationMenuItem(
+                "智能解码（\(detection.kind.rawValue)）",
+                operation: .smartDecode
+            ))
+            submenu.addItem(.separator())
+        }
+
+        submenu.addItem(categoryMenuItem(
+            title: "URL",
+            operations: [.urlEncodeComponent, .urlDecode, .formURLDecode]
+        ))
+        submenu.addItem(categoryMenuItem(
+            title: "Base64",
+            operations: [
+                .base64Encode, .base64Decode,
+                .base64URLEncode, .base64URLDecode
+            ]
+        ))
+        submenu.addItem(categoryMenuItem(
+            title: "HTML 实体",
+            operations: [.htmlEncode, .htmlDecode]
+        ))
+        submenu.addItem(categoryMenuItem(
+            title: "Unicode/JSON 转义",
+            operations: [.unicodeEncode, .unicodeDecode]
+        ))
+        root.submenu = submenu
+        menu.addItem(root)
+        return menu
+    }
+
+    @objc
+    private func performTextTransformation(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let operation = TextTransformationOperation(rawValue: rawValue) else { return }
+        textTransformationHandler?(operation)
+    }
+
+    private func categoryMenuItem(
+        title: String,
+        operations: [TextTransformationOperation]
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        let submenu = NSMenu(title: title)
+        operations.forEach {
+            submenu.addItem(transformationMenuItem($0.title, operation: $0))
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    private func transformationMenuItem(
+        _ title: String,
+        operation: TextTransformationOperation
+    ) -> NSMenuItem {
+        let item = NSMenuItem(
+            title: title,
+            action: #selector(performTextTransformation(_:)),
+            keyEquivalent: ""
+        )
+        item.target = self
+        item.representedObject = operation.rawValue
+        return item
     }
 
     override func insertTab(_ sender: Any?) {
