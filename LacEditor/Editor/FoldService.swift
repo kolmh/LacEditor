@@ -36,15 +36,15 @@ enum FoldService {
     }
 
     private static func jsonRange(in text: String, at cursor: Int) -> NSRange? {
-        let characters = Array(text.utf16)
-        guard !characters.isEmpty else { return nil }
-        let safeCursor = min(max(cursor, 0), characters.count - 1)
+        let characters = text as NSString
+        guard characters.length > 0 else { return nil }
+        let safeCursor = min(max(cursor, 0), characters.length - 1)
         var stack: [(index: Int, delimiter: UInt16)] = []
         var isInString = false
         var isEscaped = false
 
-        func consume(_ value: UInt16, at position: Int) {
-            let value = characters[position]
+        func consume(at position: Int) {
+            let value = characters.character(at: position)
             if isInString {
                 if isEscaped {
                     isEscaped = false
@@ -69,11 +69,12 @@ enum FoldService {
 
         if safeCursor > 0 {
             for position in 0..<safeCursor {
-                consume(characters[position], at: position)
+                consume(at: position)
             }
         }
-        if characters[safeCursor] == 123 || characters[safeCursor] == 91 {
-            consume(characters[safeCursor], at: safeCursor)
+        let cursorCharacter = characters.character(at: safeCursor)
+        if cursorCharacter == 123 || cursorCharacter == 91 {
+            consume(at: safeCursor)
         }
 
         guard let container = stack.last else { return nil }
@@ -81,8 +82,8 @@ enum FoldService {
         var scanStack: [UInt16] = []
         isInString = false
         isEscaped = false
-        for position in start..<characters.count {
-            let value = characters[position]
+        for position in start..<characters.length {
+            let value = characters.character(at: position)
             if isInString {
                 if isEscaped {
                     isEscaped = false

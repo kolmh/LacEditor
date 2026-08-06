@@ -35,12 +35,6 @@ struct LacEditorCommands: Commands {
             }
                 .keyboardShortcut("o", modifiers: .command)
                 .disabled(appState == nil)
-            Button {
-                appState?.openFolder()
-            } label: {
-                Label("打开文件夹…", systemImage: "folder")
-            }
-                .disabled(appState == nil)
             Menu {
                 if windowManager.recentFiles.urls.isEmpty {
                     Text("无最近文件")
@@ -81,8 +75,9 @@ struct LacEditorCommands: Commands {
                 .disabled(appState == nil)
             Divider()
             Button {
-                if NSApp.keyWindow?.identifier == FindReplaceWindowIdentity.identifier {
-                    NSApp.keyWindow?.performClose(nil)
+                if let keyWindow = NSApp.keyWindow,
+                   keyWindow !== appState?.hostWindow {
+                    keyWindow.performClose(nil)
                 } else {
                     appState?.closeSelectedDocument()
                 }

@@ -11,7 +11,11 @@ struct LacEditorApp: App {
 
     init() {
         let manager = WindowManager()
-        let state = AppState(recentFiles: manager.recentFiles)
+        let state = AppState(
+            recentFiles: manager.recentFiles,
+            preferences: manager.preferences
+        )
+        state.windowManager = manager
         let windowID = UUID()
         _appState = StateObject(wrappedValue: state)
         _windowManager = StateObject(wrappedValue: manager)
@@ -39,7 +43,7 @@ struct LacEditorApp: App {
                 windowManager: windowManager
             )
         }
-        .defaultSize(width: 540, height: 410)
+        .defaultSize(width: 540, height: 440)
         .windowResizability(.contentSize)
     }
 }
@@ -146,13 +150,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let manager = Self.sharedManager else { return .terminateNow }
-        if manager.hasPendingSaves {
-            manager.finishTerminationAfterPendingSaves { shouldTerminate in
-                sender.reply(toApplicationShouldTerminate: shouldTerminate)
-            }
-            return .terminateLater
+        let finish = { shouldTerminate in
+            sender.reply(toApplicationShouldTerminate: shouldTerminate)
         }
-        return manager.confirmClosingAllWindows() ? .terminateNow : .terminateCancel
+        if manager.hasPendingSaves {
+            manager.finishTerminationAfterPendingSaves(completion: finish)
+        } else {
+            manager.confirmClosingAllWindows(completion: finish)
+        }
+        return .terminateLater
     }
 }
 
@@ -330,14 +336,25 @@ struct WindowCloseCoordinator: NSViewRepresentable {
                 appState.waitForPendingSaves { [weak self, weak sender] in
                     guard let self, let sender else { return }
                     isWaitingForSave = false
-                    if appState.confirmClosingAllDocuments() {
+                    appState.confirmClosingAllDocuments { [weak self, weak sender] approved in
+                        guard let self, let sender, approved else { return }
                         isCloseApproved = true
                         sender.performClose(nil)
                     }
                 }
                 return false
             }
-            return appState.confirmClosingAllDocuments()
+            guard !isWaitingForSave else { return false }
+            isWaitingForSave = true
+            appState.confirmClosingAllDocuments { [weak self, weak sender] approved in
+                guard let self, let sender else { return }
+                isWaitingForSave = false
+                if approved {
+                    isCloseApproved = true
+                    sender.performClose(nil)
+                }
+            }
+            return false
         }
 
         func windowDidBecomeKey(_ notification: Notification) {

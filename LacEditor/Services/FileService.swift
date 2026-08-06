@@ -11,6 +11,51 @@ struct DecodedFile {
     let lineCount: Int
 }
 
+struct DocumentFileIdentity: Hashable, Sendable {
+    let canonicalPath: String
+    let resourceIdentifier: String?
+
+    static func resolve(_ url: URL) -> Self {
+        let canonicalURL = url.standardizedFileURL.resolvingSymlinksInPath()
+        let values = try? canonicalURL.resourceValues(forKeys: [.fileResourceIdentifierKey])
+        return Self(
+            canonicalPath: canonicalURL.path,
+            resourceIdentifier: values?.fileResourceIdentifier.map(String.init(describing:))
+        )
+    }
+
+    func matches(_ other: Self) -> Bool {
+        if let resourceIdentifier, let otherIdentifier = other.resourceIdentifier {
+            return resourceIdentifier == otherIdentifier
+        }
+        return canonicalPath == other.canonicalPath
+    }
+}
+
+struct FileRevisionSnapshot: Equatable, Sendable {
+    let identity: DocumentFileIdentity
+    let modificationDate: Date?
+    let fileSize: Int?
+
+    nonisolated static func capture(_ url: URL) throws -> Self {
+        let values = try url.resourceValues(forKeys: [
+            .fileResourceIdentifierKey,
+            .contentModificationDateKey,
+            .fileSizeKey
+        ])
+        return Self(
+            identity: DocumentFileIdentity.resolve(url),
+            modificationDate: values.contentModificationDate,
+            fileSize: values.fileSize
+        )
+    }
+}
+
+struct FileEncodingChoice: Sendable {
+    let name: String
+    let encoding: String.Encoding
+}
+
 enum PreparedFileRead {
     case decoded(DecodedFile)
     case needsEncoding(Data, byteCount: Int)
@@ -18,6 +63,7 @@ enum PreparedFileRead {
 
 enum FileServiceError: LocalizedError {
     case unsupportedEncoding
+    case unrepresentableCharacters(String)
     case invalidFileName
     case destinationExists
 
@@ -25,6 +71,8 @@ enum FileServiceError: LocalizedError {
         switch self {
         case .unsupportedEncoding:
             "无法使用所选编码读取文件。"
+        case let .unrepresentableCharacters(encodingName):
+            "当前内容包含无法使用\(encodingName)保存的字符。"
         case .invalidFileName:
             "文件名不能为空，也不能包含“/”。"
         case .destinationExists:
@@ -35,7 +83,7 @@ enum FileServiceError: LocalizedError {
 
 @MainActor
 final class FileService {
-    static let supportedExtensions = [
+    nonisolated static let supportedExtensions = [
         "txt", "md", "markdown", "html", "htm", "json",
         "js", "mjs", "cjs", "ts", "tsx", "css", "py", "pyw", "swift",
         "sh", "bash", "zsh", "yaml", "yml", "c", "h", "cc", "cpp",
@@ -46,22 +94,14 @@ final class FileService {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        panel.allowedContentTypes = supportedContentTypes
+        panel.allowedContentTypes = Self.supportedContentTypes
         return panel.runModal() == .OK ? panel.urls : []
-    }
-
-    func chooseFolder() -> URL? {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        return panel.runModal() == .OK ? panel.url : nil
     }
 
     func chooseSaveURL(suggestedName: String) -> URL? {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = suggestedName
-        panel.allowedContentTypes = supportedContentTypes
+        panel.allowedContentTypes = Self.supportedContentTypes
         panel.canCreateDirectories = true
         return panel.runModal() == .OK ? panel.url : nil
     }
@@ -110,40 +150,47 @@ final class FileService {
         byteCount: Int? = nil
     ) throws -> DecodedFile {
 
-        let gb18030 = String.Encoding(
-            rawValue: CFStringConvertEncodingToNSStringEncoding(
-                CFStringEncoding(0x0632)
-            )
+        guard let selected = chooseEncoding(for: url) else {
+            throw CocoaError(.userCancelled)
+        }
+        return try Self.decode(
+            data,
+            encoding: selected.encoding,
+            encodingName: selected.name,
+            byteCount: byteCount
         )
-        let choices: [(String, String.Encoding)] = [
-            ("UTF-16", .utf16),
-            ("简体中文（GB 18030）", gb18030),
-            ("西欧（ISO Latin 1）", .isoLatin1),
-            ("西欧（Windows Latin 1）", .windowsCP1252),
-            ("Mac OS Roman", .macOSRoman)
-        ]
+    }
+
+    func chooseEncoding(for url: URL) -> FileEncodingChoice? {
+        let choices = Self.selectableEncodings
         let alert = NSAlert()
         alert.messageText = "请选择文件编码"
         alert.informativeText = "“\(url.lastPathComponent)”不是有效的 UTF-8 文件。请选择用于打开它的文本编码。"
         alert.addButton(withTitle: "打开")
         alert.addButton(withTitle: "取消")
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 260, height: 26))
-        popup.addItems(withTitles: choices.map(\.0))
+        popup.addItems(withTitles: choices.map(\.name))
         alert.accessoryView = popup
 
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            throw CocoaError(.userCancelled)
-        }
-        let selected = choices[popup.indexOfSelectedItem]
-        guard let text = String(data: data, encoding: selected.1) else {
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        return choices[popup.indexOfSelectedItem]
+    }
+
+    nonisolated static func decode(
+        _ data: Data,
+        encoding: String.Encoding,
+        encodingName: String,
+        byteCount: Int? = nil
+    ) throws -> DecodedFile {
+        guard let text = String(data: data, encoding: encoding) else {
             throw FileServiceError.unsupportedEncoding
         }
         return DecodedFile(
             text: text,
-            encoding: selected.1,
-            encodingName: selected.0,
+            encoding: encoding,
+            encodingName: encodingName,
             byteCount: byteCount ?? data.count,
-            lineCount: Self.countLines(in: text)
+            lineCount: countLines(in: text)
         )
     }
 
@@ -152,11 +199,44 @@ final class FileService {
     }
 
     nonisolated static func writeUTF8(_ text: String, to url: URL) throws {
-        guard let data = text.data(using: .utf8) else {
-            throw FileServiceError.unsupportedEncoding
+        try write(text, to: url, encoding: .utf8, encodingName: "UTF-8")
+    }
+
+    nonisolated static func write(
+        _ text: String,
+        to url: URL,
+        encoding: String.Encoding,
+        encodingName: String
+    ) throws {
+        guard let data = text.data(using: encoding, allowLossyConversion: false) else {
+            throw FileServiceError.unrepresentableCharacters(encodingName)
         }
         try data.write(to: url, options: .atomic)
     }
+
+    nonisolated static func encodingName(for encoding: String.Encoding) -> String {
+        if encoding == .utf8 { return "UTF-8" }
+        if encoding == .utf16 { return "UTF-16" }
+        if encoding == gb18030Encoding { return "简体中文（GB 18030）" }
+        if encoding == .isoLatin1 { return "西欧（ISO Latin 1）" }
+        if encoding == .windowsCP1252 { return "西欧（Windows Latin 1）" }
+        if encoding == .macOSRoman { return "Mac OS Roman" }
+        return "编码 \(encoding.rawValue)"
+    }
+
+    nonisolated static let gb18030Encoding = String.Encoding(
+        rawValue: CFStringConvertEncodingToNSStringEncoding(
+            CFStringEncoding(0x0632)
+        )
+    )
+
+    nonisolated static let selectableEncodings: [FileEncodingChoice] = [
+        FileEncodingChoice(name: "UTF-16", encoding: .utf16),
+        FileEncodingChoice(name: "简体中文（GB 18030）", encoding: gb18030Encoding),
+        FileEncodingChoice(name: "西欧（ISO Latin 1）", encoding: .isoLatin1),
+        FileEncodingChoice(name: "西欧（Windows Latin 1）", encoding: .windowsCP1252),
+        FileEncodingChoice(name: "Mac OS Roman", encoding: .macOSRoman)
+    ]
 
     nonisolated private static func countLines(in text: String) -> Int {
         var count = 1
@@ -197,34 +277,7 @@ final class FileService {
         return destination
     }
 
-    func loadTree(at root: URL) -> [FileTreeNode] {
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isHiddenKey]
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: root,
-            includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-
-        return urls.compactMap { url in
-            guard let values = try? url.resourceValues(forKeys: keys),
-                  values.isHidden != true else { return nil }
-            let isDirectory = values.isDirectory == true
-            if !isDirectory && !Self.supportedExtensions.contains(url.pathExtension.lowercased()) {
-                return nil
-            }
-            return FileTreeNode(
-                url: url,
-                isDirectory: isDirectory,
-                children: isDirectory ? loadTree(at: url) : nil
-            )
-        }
-        .sorted {
-            if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
-            return $0.name.localizedStandardCompare($1.name) == .orderedAscending
-        }
-    }
-
-    private var supportedContentTypes: [UTType] {
+    static var supportedContentTypes: [UTType] {
         Self.supportedExtensions.compactMap { UTType(filenameExtension: $0) }
     }
 }

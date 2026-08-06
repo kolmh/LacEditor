@@ -18,6 +18,11 @@ let package = Package(
                 .linkedFramework("UniformTypeIdentifiers"),
                 .linkedFramework("WebKit")
             ]
+        ),
+        .testTarget(
+            name: "LacEditorTests",
+            dependencies: ["LacEditor"],
+            path: "LacEditorTests"
         )
     ]
 )

@@ -11,7 +11,10 @@ fail() {
     exit 1
 }
 
-print "[1/6] 发布门禁与静态分析"
+print "[1/7] XCTest 稳定性回归"
+swift test
+
+print "[2/7] 发布门禁与静态分析"
 "$SCRIPT_DIR/verify-release.sh"
 xcodebuild \
     -quiet \
@@ -23,19 +26,19 @@ xcodebuild \
     CODE_SIGNING_ALLOWED=NO \
     analyze
 
-print "[2/6] 文件读写与格式集成验证"
+print "[3/7] 文件读写与格式集成验证"
 swiftc \
     LacEditor/Models/EditorLanguage.swift \
-    LacEditor/Models/FileTreeNode.swift \
     LacEditor/Services/FileService.swift \
     Verification/FileServiceVerification.swift \
     -o .build/file-service-verification
 .build/file-service-verification
 
-print "[3/6] 大文件性能基线"
+print "[4/7] 大文件性能基线"
 swiftc -O -parse-as-library \
     LacEditor/Models/EditorLanguage.swift \
     LacEditor/Models/EditorDocument.swift \
+    LacEditor/Services/FileService.swift \
     LacEditor/Services/TextSearchService.swift \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
@@ -47,7 +50,7 @@ swiftc -O -parse-as-library \
     -o .build/performance-verification
 .build/performance-verification
 
-print "[4/6] 1/10/20/50/100 MB 文件门禁"
+print "[5/7] 1/10/20/50/100 MB 文件门禁"
 swiftc -O -parse-as-library \
     Verification/LargeFixtureGenerator.swift \
     -o .build/large-fixture-generator
@@ -56,7 +59,6 @@ fixture_directory=".build/LargeFileFixtures"
 swiftc -O -parse-as-library \
     LacEditor/Models/EditorLanguage.swift \
     LacEditor/Models/EditorDocument.swift \
-    LacEditor/Models/FileTreeNode.swift \
     LacEditor/Services/FileService.swift \
     LacEditor/Services/TextSearchService.swift \
     LacEditor/Editor/CodeLexicalScanner.swift \
@@ -65,7 +67,7 @@ swiftc -O -parse-as-library \
     -o .build/large-file-verification
 .build/large-file-verification "$fixture_directory"
 
-print "[5/6] 产物、平台与隐私静态检查"
+print "[6/7] 产物、平台与隐私静态检查"
 app_path=".build/XcodeDerivedData/Build/Products/Release/LacEditor.app"
 info_plist="$app_path/Contents/Info.plist"
 binary="$app_path/Contents/MacOS/LacEditor"
@@ -96,7 +98,7 @@ if rg -n 'URLSession|NWConnection|import Network|com\.apple\.security\.network' 
     fail "源码或工程中发现未审核的网络 API/权限。"
 fi
 
-print "[6/6] 构建隔离的 UI 验收 App"
+print "[7/7] 构建隔离的 UI 验收 App"
 xcodebuild \
     -project LacEditor.xcodeproj \
     -scheme LacEditor \

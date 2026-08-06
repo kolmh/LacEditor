@@ -74,12 +74,16 @@ enum TextCodecError: LocalizedError, Equatable {
 
 enum TextCodecService {
     static let automaticDetectionLimit = 16 * 1_024
+    static let warningInputByteLimit = 8 * 1_024 * 1_024
+    static let maximumInputByteLimit = 32 * 1_024 * 1_024
 
     static func transform(
         _ input: String,
-        operation: TextTransformationOperation
+        operation: TextTransformationOperation,
+        isCancelled: @escaping () -> Bool = { false }
     ) throws -> String {
         guard !input.isEmpty else { throw TextCodecError.emptyInput }
+        if isCancelled() { throw CancellationError() }
         switch operation {
         case .smartDecode:
             guard let detection = detect(in: input) else {
@@ -87,7 +91,7 @@ enum TextCodecService {
             }
             return detection.output
         case .urlEncodeComponent:
-            return percentEncode(input)
+            return try percentEncode(input, isCancelled: isCancelled)
         case .urlDecode:
             return try percentDecode(input, treatsPlusAsSpace: false)
         case .formURLDecode:
@@ -203,11 +207,31 @@ enum TextCodecService {
         return (range, text.substring(with: range))
     }
 
-    private static func percentEncode(_ input: String) -> String {
-        let unreserved = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~".utf8)
-        return input.utf8.map { byte in
-            unreserved.contains(byte) ? String(UnicodeScalar(byte)) : String(format: "%%%02X", byte)
-        }.joined()
+    private static func percentEncode(
+        _ input: String,
+        isCancelled: () -> Bool
+    ) throws -> String {
+        let source = input.utf8
+        var output: [UInt8] = []
+        output.reserveCapacity(min(source.count * 3, maximumInputByteLimit * 3))
+        let hexadecimal = Array("0123456789ABCDEF".utf8)
+        for (index, byte) in source.enumerated() {
+            if index.isMultiple(of: 4_096), isCancelled() {
+                throw CancellationError()
+            }
+            let isUnreserved = (byte >= 65 && byte <= 90)
+                || (byte >= 97 && byte <= 122)
+                || (byte >= 48 && byte <= 57)
+                || byte == 45 || byte == 46 || byte == 95 || byte == 126
+            if isUnreserved {
+                output.append(byte)
+            } else {
+                output.append(37)
+                output.append(hexadecimal[Int(byte >> 4)])
+                output.append(hexadecimal[Int(byte & 0x0F)])
+            }
+        }
+        return String(decoding: output, as: UTF8.self)
     }
 
     private static func percentDecode(

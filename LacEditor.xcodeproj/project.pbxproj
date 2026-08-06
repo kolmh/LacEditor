@@ -12,7 +12,8 @@
 		A00000000000000000000103 /* LacEditorCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* LacEditorCommands.swift */; };
 		A00000000000000000000104 /* EditorLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* EditorLanguage.swift */; };
 		A00000000000000000000105 /* EditorDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* EditorDocument.swift */; };
-		A00000000000000000000106 /* FileTreeNode.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* FileTreeNode.swift */; };
+		A0000000000000000000012C /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002C /* AppPreferences.swift */; };
+		A0000000000000000000012D /* SidebarLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002D /* SidebarLibraryStore.swift */; };
 		A00000000000000000000107 /* FileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* FileService.swift */; };
 		A00000000000000000000108 /* RecentFilesStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000008 /* RecentFilesStore.swift */; };
 		A00000000000000000000109 /* JSONFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000009 /* JSONFormatter.swift */; };
@@ -54,7 +55,8 @@
 		A00000000000000000000003 /* LacEditorCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LacEditorCommands.swift; sourceTree = "<group>"; };
 		A00000000000000000000004 /* EditorLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLanguage.swift; sourceTree = "<group>"; };
 		A00000000000000000000005 /* EditorDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDocument.swift; sourceTree = "<group>"; };
-		A00000000000000000000006 /* FileTreeNode.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTreeNode.swift; sourceTree = "<group>"; };
+		A0000000000000000000002C /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
+		A0000000000000000000002D /* SidebarLibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarLibraryStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000007 /* FileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileService.swift; sourceTree = "<group>"; };
 		A00000000000000000000008 /* RecentFilesStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecentFilesStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000009 /* JSONFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = JSONFormatter.swift; sourceTree = "<group>"; };
@@ -129,9 +131,9 @@
 			path = LacEditor;
 			sourceTree = "<group>";
 		};
-		A00000000000000000000302 /* App */ = {isa = PBXGroup; children = (A00000000000000000000001, A00000000000000000000002, A00000000000000000000003, A0000000000000000000001B); path = App; sourceTree = "<group>"; };
-		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005, A00000000000000000000006); path = Models; sourceTree = "<group>"; };
-		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000008, A00000000000000000000009, A00000000000000000000017, A0000000000000000000002A); path = Services; sourceTree = "<group>"; };
+		A00000000000000000000302 /* App */ = {isa = PBXGroup; children = (A00000000000000000000001, A00000000000000000000002, A0000000000000000000002C, A00000000000000000000003, A0000000000000000000001B); path = App; sourceTree = "<group>"; };
+		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005); path = Models; sourceTree = "<group>"; };
+		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000008, A0000000000000000000002D, A00000000000000000000009, A00000000000000000000017, A0000000000000000000002A); path = Services; sourceTree = "<group>"; };
 		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A00000000000000000000028, A00000000000000000000029, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
 		A00000000000000000000306 /* Preview */ = {isa = PBXGroup; children = (A0000000000000000000000F, A00000000000000000000010); path = Preview; sourceTree = "<group>"; };
 		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000027, A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000014, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000002B, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
@@ -198,7 +200,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000101, A00000000000000000000102, A00000000000000000000103,
-				A00000000000000000000104, A00000000000000000000105, A00000000000000000000106,
+				A00000000000000000000104, A00000000000000000000105, A0000000000000000000012C,
+				A0000000000000000000012D,
 				A00000000000000000000107, A00000000000000000000108, A00000000000000000000109,
 				A0000000000000000000010A, A0000000000000000000010B, A0000000000000000000010C,
 				A0000000000000000000010D, A0000000000000000000010E, A0000000000000000000010F,
@@ -229,7 +232,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -238,7 +241,7 @@
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -254,7 +257,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 6;
+				CURRENT_PROJECT_VERSION = 7;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -263,7 +266,7 @@
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.6.0;
+				MARKETING_VERSION = 0.7.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;

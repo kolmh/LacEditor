@@ -41,6 +41,7 @@ swift build -c release
 swiftc \
     LacEditor/Models/EditorLanguage.swift \
     LacEditor/Models/EditorDocument.swift \
+    LacEditor/Services/FileService.swift \
     LacEditor/Services/JSONFormatter.swift \
     LacEditor/Services/TextSearchService.swift \
     LacEditor/Services/TextCodecService.swift \

@@ -1,6 +1,18 @@
 import Foundation
 
 enum ListContinuationService {
+    private static let continuationOrderedExpression = try! NSRegularExpression(
+        pattern: #"^(\d+)([.)])\s+(.+)$"#
+    )
+    private static let continuationUnorderedExpression = try! NSRegularExpression(
+        pattern: #"^([-*+])\s+(.+)$"#
+    )
+    private static let orderedItemExpression = try! NSRegularExpression(
+        pattern: #"^([ \t]*)(\d+)([.)])\s+.*$"#
+    )
+    private static let emptyItemExpression = try! NSRegularExpression(
+        pattern: #"^(?:\d+[.)]|[-*+])\s*$"#
+    )
     struct OrderedListEdit {
         let range: NSRange
         let replacement: String
@@ -27,14 +39,14 @@ enum ListContinuationService {
         let content = linePrefix.drop { $0 == " " || $0 == "\t" }
 
         if let ordered = firstMatch(
-            pattern: #"^(\d+)([.)])\s+(.+)$"#,
+            expression: continuationOrderedExpression,
             in: String(content)
         ), let number = Int(ordered[1]) {
             return "\(number + 1)\(ordered[2]) "
         }
 
         if let unordered = firstMatch(
-            pattern: #"^([-*+])\s+(.+)$"#,
+            expression: continuationUnorderedExpression,
             in: String(content)
         ) {
             return "\(unordered[1]) "
@@ -45,9 +57,10 @@ enum ListContinuationService {
 
     static func isEmptyListItem(_ linePrefix: String) -> Bool {
         let content = linePrefix.drop { $0 == " " || $0 == "\t" }
-        return String(content).range(
-            of: #"^(?:\d+[.)]|[-*+])\s*$"#,
-            options: .regularExpression
+        let value = String(content)
+        return emptyItemExpression.firstMatch(
+            in: value,
+            range: NSRange(location: 0, length: (value as NSString).length)
         ) != nil
     }
 
@@ -325,7 +338,7 @@ enum ListContinuationService {
         lineIndex: Int = 0
     ) -> OrderedItem? {
         guard let match = firstMatch(
-            pattern: #"^([ \t]*)(\d+)([.)])\s+.*$"#,
+            expression: orderedItemExpression,
             in: line
         ), let number = Int(match[2]) else {
             return nil
@@ -364,9 +377,11 @@ enum ListContinuationService {
         return NSRange(location: location, length: length)
     }
 
-    private static func firstMatch(pattern: String, in value: String) -> [String]? {
-        guard let regex = try? NSRegularExpression(pattern: pattern),
-              let match = regex.firstMatch(
+    private static func firstMatch(
+        expression: NSRegularExpression,
+        in value: String
+    ) -> [String]? {
+        guard let match = expression.firstMatch(
                 in: value,
                 range: NSRange(location: 0, length: (value as NSString).length)
               ) else { return nil }

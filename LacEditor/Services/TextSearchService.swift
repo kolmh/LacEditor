@@ -17,6 +17,7 @@ final class FindReplaceState: ObservableObject {
     @Published var isCaseSensitive = false
     @Published var message: String?
     @Published var isWorking = false
+    @Published var activeDocumentID: UUID?
     @Published var focusRequestID = UUID()
 }
 
@@ -112,7 +113,8 @@ enum TextSearchService {
         in text: String,
         query: String,
         replacement: String,
-        caseSensitive: Bool
+        caseSensitive: Bool,
+        isCancelled: () -> Bool = { false }
     ) -> (text: String, count: Int) {
         guard !query.isEmpty else { return (text, 0) }
         let nsText = text as NSString
@@ -121,6 +123,7 @@ enum TextSearchService {
         var location = 0
 
         while location <= nsText.length {
+            if count.isMultiple(of: 512), isCancelled() { return (text, 0) }
             let range = NSRange(location: location, length: nsText.length - location)
             let match = nsText.range(of: query, options: options, range: range)
             guard match.location != NSNotFound else { break }

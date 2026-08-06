@@ -9,6 +9,8 @@ final class WindowManager: ObservableObject {
     )
 
     let recentFiles = RecentFilesStore()
+    let sidebarLibrary = SidebarLibraryStore()
+    let preferences = AppPreferences()
     @Published private(set) var activeState: AppState?
     @Published private(set) var draggedDocumentID: UUID?
     private(set) var terminationApproved = false
@@ -33,6 +35,7 @@ final class WindowManager: ObservableObject {
     private var isConfirmingRecentFilesClear = false
     private var activeStateCancellable: AnyCancellable?
     private var recentFilesCancellable: AnyCancellable?
+    private var sidebarLibraryCancellable: AnyCancellable?
     private let fileService = FileService()
     private lazy var appearanceMenuController = AppearanceMenuController(
         windowManager: self
@@ -42,11 +45,15 @@ final class WindowManager: ObservableObject {
         recentFilesCancellable = recentFiles.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
+        sidebarLibraryCancellable = sidebarLibrary.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
         _ = appearanceMenuController
     }
 
     func register(windowID: UUID, state: AppState, window: NSWindow) {
         states[windowID] = state
+        state.windowManager = self
         state.hostWindow = window
         if window.isKeyWindow || activeState == nil {
             activate(windowID: windowID)
@@ -63,7 +70,7 @@ final class WindowManager: ObservableObject {
 
     func unregister(windowID: UUID) {
         let removedState = states.removeValue(forKey: windowID)
-        removedState?.dismissFindReplace()
+        removedState?.closeAuxiliaryWindows()
         windowControllers.removeValue(forKey: windowID)
         if activeState === removedState {
             activeState = states.values.first
@@ -76,7 +83,12 @@ final class WindowManager: ObservableObject {
         near screenPoint: NSPoint? = nil
     ) -> AppState {
         let windowID = UUID()
-        let state = AppState(initialDocument: document, recentFiles: recentFiles)
+        let state = AppState(
+            initialDocument: document,
+            recentFiles: recentFiles,
+            preferences: preferences
+        )
+        state.windowManager = self
         states[windowID] = state
 
         let rootView = EditorWindowRoot(
@@ -116,7 +128,49 @@ final class WindowManager: ObservableObject {
     }
 
     func openFileInNewWindow(_ url: URL) {
-        openNewWindow().openFile(url)
+        openFile(url, preferredState: nil, createWindowIfNeeded: true)
+    }
+
+    func openFile(
+        _ url: URL,
+        preferredState: AppState?,
+        createWindowIfNeeded: Bool = false
+    ) {
+        let identity = DocumentFileIdentity.resolve(url)
+        if let match = openDocument(matching: identity) {
+            focus(match.document, in: match.state)
+            return
+        }
+        let target = createWindowIfNeeded ? openNewWindow() : (preferredState ?? activeState ?? openNewWindow())
+        target.beginOpeningFile(url)
+    }
+
+    func conflictingDocument(
+        at url: URL,
+        excluding documentID: UUID
+    ) -> (state: AppState, document: EditorDocument)? {
+        let identity = DocumentFileIdentity.resolve(url)
+        return states.values.lazy.compactMap { state in
+            state.documents.first(where: {
+                $0.id != documentID && $0.fileIdentity?.matches(identity) == true
+            }).map { (state, $0) }
+        }.first
+    }
+
+    func focus(_ document: EditorDocument, in state: AppState) {
+        state.selectedDocumentID = document.id
+        state.hostWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func openDocument(
+        matching identity: DocumentFileIdentity
+    ) -> (state: AppState, document: EditorDocument)? {
+        states.values.lazy.compactMap { state in
+            state.documents.first(where: {
+                $0.fileIdentity?.matches(identity) == true
+            }).map { (state, $0) }
+        }.first
     }
 
     func requestClearRecentFiles() {
@@ -149,6 +203,95 @@ final class WindowManager: ObservableObject {
             if response == .alertFirstButtonReturn {
                 recentFiles.clear()
             }
+        }
+    }
+
+    func requestCreateSidebarGroup(adding url: URL? = nil) {
+        presentTextPrompt(
+            title: "新建分组",
+            message: "输入分组名称。",
+            initialValue: "新分组",
+            actionTitle: "创建"
+        ) { [weak self] name in
+            guard let self,
+                  let id = sidebarLibrary.createGroup(named: name) else { return }
+            if let url { sidebarLibrary.add(url, toGroup: id) }
+        }
+    }
+
+    func requestRenameSidebarGroup(_ group: SidebarFileGroup) {
+        presentTextPrompt(
+            title: "重命名分组",
+            message: "输入新的分组名称。",
+            initialValue: group.name,
+            actionTitle: "重命名"
+        ) { [weak self] name in
+            self?.sidebarLibrary.renameGroup(group.id, to: name)
+        }
+    }
+
+    func requestDeleteSidebarGroup(_ group: SidebarFileGroup) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "删除分组“\(group.name)”？"
+        alert.informativeText = "只会删除侧边栏中的快捷入口，不会删除磁盘上的文件。"
+        alert.addButton(withTitle: "删除分组")
+        alert.addButton(withTitle: "取消")
+        present(alert) { [weak self] response in
+            if response == .alertFirstButtonReturn {
+                self?.sidebarLibrary.deleteGroup(group.id)
+            }
+        }
+    }
+
+    func requestRelocateSidebarFile(_ missingURL: URL) {
+        let panel = NSOpenPanel()
+        panel.title = "重新定位“\(missingURL.lastPathComponent)”"
+        panel.message = "选择该文件当前所在的位置。"
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = FileService.supportedContentTypes
+        let apply: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .OK, let replacement = panel.url else { return }
+            self?.sidebarLibrary.replace(missingURL, with: replacement)
+            self?.recentFiles.replace(missingURL, with: replacement)
+        }
+        if let window = activeState?.hostWindow {
+            panel.beginSheetModal(for: window, completionHandler: apply)
+        } else {
+            apply(panel.runModal())
+        }
+    }
+
+    private func presentTextPrompt(
+        title: String,
+        message: String,
+        initialValue: String,
+        actionTitle: String,
+        completion: @escaping (String) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: actionTitle)
+        alert.addButton(withTitle: "取消")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.stringValue = initialValue
+        alert.accessoryView = field
+        present(alert) { response in
+            guard response == .alertFirstButtonReturn else { return }
+            completion(field.stringValue)
+        }
+    }
+
+    private func present(
+        _ alert: NSAlert,
+        completion: @escaping (NSApplication.ModalResponse) -> Void
+    ) {
+        if let window = activeState?.hostWindow {
+            alert.beginSheetModal(for: window, completionHandler: completion)
+        } else {
+            completion(alert.runModal())
         }
     }
 
@@ -284,6 +427,7 @@ final class WindowManager: ObservableObject {
                 state.updateRenamedFileReference(from: url, to: newURL)
             }
             recentFiles.replace(url, with: newURL)
+            sidebarLibrary.replace(url, with: newURL)
         } catch {
             let alert = NSAlert(error: error)
             alert.messageText = "无法重命名文件"
@@ -313,13 +457,27 @@ final class WindowManager: ObservableObject {
         }
     }
 
-    func confirmClosingAllWindows() -> Bool {
+    func confirmClosingAllWindows(completion: @escaping (Bool) -> Void) {
         terminationApproved = false
-        for state in states.values where !state.confirmClosingAllDocuments() {
-            return false
+        confirmClosingStates(Array(states.values), completion: completion)
+    }
+
+    private func confirmClosingStates(
+        _ queue: [AppState],
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let state = queue.first else {
+            terminationApproved = true
+            completion(true)
+            return
         }
-        terminationApproved = true
-        return true
+        state.confirmClosingAllDocuments { [weak self] approved in
+            guard let self, approved else {
+                completion(false)
+                return
+            }
+            self.confirmClosingStates(Array(queue.dropFirst()), completion: completion)
+        }
     }
 
     var hasPendingSaves: Bool {
@@ -334,7 +492,7 @@ final class WindowManager: ObservableObject {
                 completion(false)
                 return
             }
-            completion(confirmClosingAllWindows())
+            confirmClosingAllWindows(completion: completion)
         }
     }
 

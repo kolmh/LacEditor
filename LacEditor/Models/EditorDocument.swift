@@ -60,6 +60,16 @@ enum DocumentIOState: Equatable {
     }
 }
 
+struct DocumentSaveResult: Sendable {
+    let targetURL: URL
+    let encoding: String.Encoding
+    let snapshotRevision: UInt
+    let fileRevisionSnapshot: FileRevisionSnapshot?
+    let errorDescription: String?
+
+    var succeeded: Bool { errorDescription == nil && fileRevisionSnapshot != nil }
+}
+
 final class DocumentTaskCoordinator: @unchecked Sendable {
     enum Kind: Hashable {
         case search
@@ -141,7 +151,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     }
     @Published var url: URL?
     @Published var language: EditorLanguage
-    @Published var encodingName: String
+    @Published private(set) var fileEncoding: String.Encoding
     @Published var isDirty: Bool
     @Published var cursorLine = 1
     @Published var cursorColumn = 1
@@ -156,6 +166,8 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private(set) var textRevision: UInt = 0
     var scrollPositionRatio: CGFloat = 0
     var foldedRange: NSRange?
+    private(set) var fileIdentity: DocumentFileIdentity?
+    private(set) var fileRevisionSnapshot: FileRevisionSnapshot?
     let taskCoordinator = DocumentTaskCoordinator()
     private var savedText: String
     private var liveTextProviderID: UUID?
@@ -178,7 +190,8 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         text: String = "",
         url: URL? = nil,
         language: EditorLanguage = .plainText,
-        encodingName: String = "UTF-8",
+        fileEncoding: String.Encoding = .utf8,
+        fileRevisionSnapshot: FileRevisionSnapshot? = nil,
         isDirty: Bool = false,
         byteCount: Int? = nil,
         lineCount: Int? = nil,
@@ -187,7 +200,9 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         self.text = text
         self.url = url
         self.language = language
-        self.encodingName = encodingName
+        self.fileEncoding = fileEncoding
+        self.fileIdentity = url.map(DocumentFileIdentity.resolve)
+        self.fileRevisionSnapshot = fileRevisionSnapshot
         self.isDirty = isDirty
         let resolvedProfile = performanceProfile ?? .resolve(
             byteCount: byteCount ?? text.utf8.count,
@@ -213,6 +228,19 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
 
     var displayName: String {
         url?.lastPathComponent ?? "未命名"
+    }
+
+    var encodingName: String {
+        FileService.encodingName(for: fileEncoding)
+    }
+
+    func updateFileEncoding(_ encoding: String.Encoding) {
+        fileEncoding = encoding
+    }
+
+    func updateFileRevisionSnapshot(_ snapshot: FileRevisionSnapshot?) {
+        fileRevisionSnapshot = snapshot
+        if let snapshot { fileIdentity = snapshot.identity }
     }
 
     var isDisposableBlank: Bool {
@@ -382,6 +410,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         let wasMarkdown = language == .markdown
         let newLanguage = EditorLanguage.infer(from: newURL)
         url = newURL.standardizedFileURL
+        fileIdentity = DocumentFileIdentity.resolve(newURL)
         language = newLanguage
         if newLanguage == .markdown, !wasMarkdown {
             isPreviewVisible = true

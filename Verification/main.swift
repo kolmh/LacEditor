@@ -296,8 +296,47 @@ require(
     "ordered lists over 500 items use background normalization"
 )
 let orderedHTML = MarkdownRenderer.render(orderedMarkdown, darkMode: false)
-require(orderedHTML.contains(#"<ol start="3">"#), "ordered list resumes at explicit number")
+require(
+    orderedHTML.contains("<li>第二项\n<ul>\n<li>子项 A</li>"),
+    "nested unordered list stays inside its ordered parent item"
+)
+require(
+    orderedHTML.components(separatedBy: "<ol").count - 1 == 1,
+    "nested unordered list does not split the outer ordered list"
+)
+require(orderedHTML.contains("<li>第三项</li>"), "ordered list resumes after nested items")
 require(orderedHTML.contains("<li>第五项</li>"), "ordered list keeps later items")
+
+let nestedListMarkdown = """
+- 一级项目
+  - 二级项目
+    - 三级项目
+  1. 二级有序项目
+  2. 二级有序项目二
+- 一级项目二
+"""
+let nestedListHTML = MarkdownRenderer.render(nestedListMarkdown, darkMode: false)
+require(
+    nestedListHTML.contains("<li>一级项目\n<ul>\n<li>二级项目\n<ul>\n<li>三级项目</li>"),
+    "three-level unordered lists preserve hierarchy"
+)
+require(
+    nestedListHTML.contains("<ol>\n<li>二级有序项目</li>\n<li>二级有序项目二</li>\n</ol>"),
+    "mixed ordered and unordered nested lists preserve hierarchy"
+)
+
+let tabIndentedListHTML = MarkdownRenderer.render(
+    "- 一级\n\t- 二级\n\t\t1. 三级有序\n- 另一个一级",
+    darkMode: false
+)
+require(
+    tabIndentedListHTML.contains("<li>一级\n<ul>\n<li>二级\n<ol>\n<li>三级有序</li>"),
+    "tab-indented mixed lists preserve hierarchy"
+)
+require(
+    tabIndentedListHTML.contains("</ol>\n</li>\n</ul>\n</li>\n<li>另一个一级</li>"),
+    "nested lists close before the following top-level item"
+)
 
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "script.js")) == .javascript, "JS language inference")
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "module.mjs")) == .javascript, "MJS language inference")

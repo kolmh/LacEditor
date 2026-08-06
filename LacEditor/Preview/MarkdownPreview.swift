@@ -8,6 +8,20 @@ private let markdownPerformanceLog = OSLog(
     category: "MarkdownPerformance"
 )
 
+private final class MarkdownWebView: WKWebView {
+    var reloadRenderedContent: (() -> Void)?
+
+    override func reload() -> WKNavigation? {
+        reloadRenderedContent?()
+        return nil
+    }
+
+    override func reloadFromOrigin() -> WKNavigation? {
+        reloadRenderedContent?()
+        return nil
+    }
+}
+
 struct MarkdownPreview: NSViewRepresentable {
     let markdown: String
     let darkMode: Bool
@@ -20,11 +34,15 @@ struct MarkdownPreview: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = false
-        let view = WKWebView(frame: .zero, configuration: configuration)
+        let view = MarkdownWebView(frame: .zero, configuration: configuration)
         view.navigationDelegate = context.coordinator
         view.setValue(false, forKey: "drawsBackground")
         context.coordinator.webView = view
         context.coordinator.document = document
+        view.reloadRenderedContent = { [weak view, weak coordinator = context.coordinator] in
+            guard let view, let coordinator else { return }
+            coordinator.reloadLastRenderedHTML(in: view)
+        }
         context.coordinator.render(markdown: markdown, darkMode: darkMode, immediately: true)
         return view
     }
@@ -39,6 +57,7 @@ struct MarkdownPreview: NSViewRepresentable {
         weak var document: EditorDocument?
         private var workItem: DispatchWorkItem?
         private var lastPayload = ""
+        private var lastRenderedHTML = ""
         private var generation = 0
         private var pendingScrollRatio: CGFloat = 0
         private let renderQueue: OperationQueue = {
@@ -116,6 +135,7 @@ struct MarkdownPreview: NSViewRepresentable {
                           let webView else { return }
                     document.taskCoordinator.finish(.preview, generation: taskGeneration)
                     pendingScrollRatio = scrollRatio(in: webView)
+                    lastRenderedHTML = html
                     webView.stopLoading()
                     webView.loadHTMLString(html, baseURL: nil)
                 }
@@ -152,6 +172,17 @@ struct MarkdownPreview: NSViewRepresentable {
             }
         }
 
+        func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+            reloadLastRenderedHTML(in: webView)
+        }
+
+        fileprivate func reloadLastRenderedHTML(in webView: WKWebView) {
+            guard !lastRenderedHTML.isEmpty else { return }
+            pendingScrollRatio = scrollRatio(in: webView)
+            webView.stopLoading()
+            webView.loadHTMLString(lastRenderedHTML, baseURL: nil)
+        }
+
         private func findScrollView(in view: NSView) -> NSScrollView? {
             if let scrollView = view as? NSScrollView { return scrollView }
             for subview in view.subviews {
@@ -165,7 +196,13 @@ struct MarkdownPreview: NSViewRepresentable {
             decidePolicyFor navigationAction: WKNavigationAction,
             decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
         ) {
-            if navigationAction.navigationType == .linkActivated {
+            if navigationAction.navigationType == .reload {
+                decisionHandler(.cancel)
+                DispatchQueue.main.async { [weak self, weak webView] in
+                    guard let self, let webView else { return }
+                    self.reloadLastRenderedHTML(in: webView)
+                }
+            } else if navigationAction.navigationType == .linkActivated {
                 if let url = navigationAction.request.url,
                    ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
                     NSWorkspace.shared.open(url)

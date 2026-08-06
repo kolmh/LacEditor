@@ -130,7 +130,13 @@ enum CodeLexicalScanner {
     private static let checkpointStride = 16 * 1_024
 
     static func supports(_ language: EditorLanguage) -> Bool {
-        configuration(for: language) != nil
+        switch language {
+        case .json, .javascript, .typescript, .css, .python, .swift,
+             .shell, .yaml, .cFamily, .sql:
+            true
+        case .plainText, .markdown, .html:
+            false
+        }
     }
 
     static func tokens(
@@ -189,6 +195,8 @@ enum CodeLexicalScanner {
 
     static func configuration(for language: EditorLanguage) -> Configuration? {
         switch language {
+        case .html:
+            return Configuration(strings: commonQuotedStrings)
         case .json:
             return Configuration(strings: [doubleQuotedString])
         case .javascript, .typescript:
@@ -553,7 +561,7 @@ enum CodeLexicalScanner {
     private static func isCommentBoundary(in string: NSString, at location: Int) -> Bool {
         guard location > 0 else { return true }
         let previous = string.character(at: location - 1)
-        return CharacterSet.whitespacesAndNewlines.contains(UnicodeScalar(previous)!)
+        return isWhitespace(previous)
     }
 
     private static func isJavaScriptRegexStart(
@@ -563,9 +571,7 @@ enum CodeLexicalScanner {
     ) -> Bool {
         var previous = location - 1
         while previous >= lowerBound,
-              CharacterSet.whitespacesAndNewlines.contains(
-                UnicodeScalar(string.character(at: previous))!
-              ) {
+              isWhitespace(string.character(at: previous)) {
             previous -= 1
         }
         guard previous >= lowerBound else { return true }
@@ -592,6 +598,11 @@ enum CodeLexicalScanner {
             length: previous - wordStart + 1
         ))
         return javascriptRegexPrefixKeywords.contains(word)
+    }
+
+    private static func isWhitespace(_ codeUnit: unichar) -> Bool {
+        guard let scalar = UnicodeScalar(codeUnit) else { return false }
+        return CharacterSet.whitespacesAndNewlines.contains(scalar)
     }
 
     private static func javascriptRegexEnd(

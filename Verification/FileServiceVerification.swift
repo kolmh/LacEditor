@@ -72,35 +72,6 @@ struct FileServiceVerification {
             // Expected.
         }
 
-        let unsupported = root.appendingPathComponent("ignored.bin")
-        try Data([0, 1, 2]).write(to: unsupported)
-        let hidden = root.appendingPathComponent(".hidden.txt")
-        try service.write("隐藏", to: hidden)
-        let nestedDirectory = root.appendingPathComponent("folder", isDirectory: true)
-        try fileManager.createDirectory(at: nestedDirectory, withIntermediateDirectories: true)
-        let tree = service.loadTree(at: root)
-        require(
-            tree.contains {
-                $0.isDirectory
-                    && $0.url.standardizedFileURL.path
-                        == nestedDirectory.standardizedFileURL.path
-            },
-            "tree includes directories"
-        )
-        require(tree.contains { $0.url.pathExtension == "json" }, "tree includes supported files")
-        require(
-            !tree.contains {
-                $0.url.standardizedFileURL.path == unsupported.standardizedFileURL.path
-            },
-            "tree excludes unsupported files"
-        )
-        require(
-            !tree.contains {
-                $0.url.standardizedFileURL.path == hidden.standardizedFileURL.path
-            },
-            "tree excludes hidden files"
-        )
-
         print(
             "File service verification passed "
                 + "(\(FileService.supportedExtensions.count) formats + 4 MiB round trip/preparation)"

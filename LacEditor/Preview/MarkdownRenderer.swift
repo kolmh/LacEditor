@@ -31,7 +31,14 @@ enum MarkdownRenderer {
           h3 { font-size: 1.22em; }
           p { margin: .8em 0; }
           ul, ol { padding-left: 1.6em; }
+          ul { list-style-type: disc; }
+          ul ul { list-style-type: circle; }
+          ul ul ul { list-style-type: square; }
+          ol { list-style-type: decimal; }
+          ol ol { list-style-type: lower-alpha; }
+          ol ol ol { list-style-type: lower-roman; }
           li { margin: .25em 0; }
+          li > ul, li > ol { margin-top: .25em; margin-bottom: .25em; }
           blockquote { margin: 1em 0; padding: .15em 1em; color: \(secondary); border-left: 3px solid \(border); }
           hr { border: 0; border-top: 1px solid \(border); margin: 1.8em 0; }
           a { color: \(accent); text-decoration: none; }
@@ -57,7 +64,6 @@ enum MarkdownRenderer {
         let lines = normalizedMarkdown.components(separatedBy: "\n")
         var output: [String] = []
         var paragraph: [String] = []
-        var listType: String?
         var inCodeBlock = false
         var codeLines: [String] = []
         var index = 0
@@ -68,19 +74,12 @@ enum MarkdownRenderer {
             paragraph.removeAll()
         }
 
-        func closeList() {
-            guard let openListType = listType else { return }
-            output.append("</\(openListType)>")
-            listType = nil
-        }
-
         while index < lines.count {
             let line = lines[index]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.hasPrefix("```") {
                 flushParagraph()
-                closeList()
                 if inCodeBlock {
                     output.append("<pre><code>\(escape(codeLines.joined(separator: "\n")))</code></pre>")
                     codeLines.removeAll()
@@ -98,16 +97,14 @@ enum MarkdownRenderer {
             }
             if trimmed.isEmpty {
                 flushParagraph()
-                closeList()
                 index += 1
                 continue
             }
 
             if index + 1 < lines.count,
                line.contains("|"),
-               isTableDivider(lines[index + 1]) {
+                isTableDivider(lines[index + 1]) {
                 flushParagraph()
-                closeList()
                 let headers = tableCells(line)
                 output.append("<table><thead><tr>\(headers.map { "<th>\(inline($0))</th>" }.joined())</tr></thead><tbody>")
                 index += 2
@@ -122,31 +119,25 @@ enum MarkdownRenderer {
 
             if let heading = headingParts(trimmed) {
                 flushParagraph()
-                closeList()
                 output.append("<h\(heading.level)>\(inline(heading.text))</h\(heading.level)>")
             } else if trimmed.range(of: #"^([-*_])(?:\s*\1){2,}$"#, options: .regularExpression) != nil {
                 flushParagraph()
-                closeList()
                 output.append("<hr>")
             } else if trimmed.hasPrefix(">") {
                 flushParagraph()
-                closeList()
                 let value = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
                 output.append("<blockquote>\(inline(value))</blockquote>")
-            } else if let item = listItem(trimmed) {
+            } else if let item = listItem(line) {
                 flushParagraph()
-                if listType != item.type {
-                    closeList()
-                    listType = item.type
-                    if item.type == "ol", let start = item.start {
-                        output.append("<ol start=\"\(start)\">")
-                    } else {
-                        output.append("<\(item.type)>")
-                    }
-                }
-                output.append("<li>\(inline(item.text))</li>")
+                let block = parseListBlock(
+                    lines,
+                    index: &index,
+                    indent: item.indent,
+                    type: item.type
+                )
+                output.append(renderListBlock(block))
+                continue
             } else {
-                closeList()
                 paragraph.append(line)
             }
             index += 1
@@ -156,7 +147,104 @@ enum MarkdownRenderer {
             output.append("<pre><code>\(escape(codeLines.joined(separator: "\n")))</code></pre>")
         }
         flushParagraph()
-        closeList()
+        return output.joined(separator: "\n")
+    }
+
+    private struct ParsedListItem {
+        let indent: Int
+        let type: String
+        let text: String
+        let number: Int?
+    }
+
+    private struct ListEntry {
+        var textLines: [String]
+        let number: Int?
+        var children: [ListBlock] = []
+    }
+
+    private struct ListBlock {
+        let type: String
+        let start: Int?
+        var items: [ListEntry]
+    }
+
+    private static func parseListBlock(
+        _ lines: [String],
+        index: inout Int,
+        indent: Int,
+        type: String
+    ) -> ListBlock {
+        var block = ListBlock(type: type, start: nil, items: [])
+
+        while index < lines.count,
+              let item = listItem(lines[index]),
+              item.indent == indent,
+              item.type == type {
+            if block.items.isEmpty {
+                block = ListBlock(type: type, start: item.number, items: [])
+            }
+            block.items.append(ListEntry(textLines: [item.text], number: item.number))
+            index += 1
+
+            while index < lines.count {
+                if let child = listItem(lines[index]), child.indent > indent {
+                    let childBlock = parseListBlock(
+                        lines,
+                        index: &index,
+                        indent: child.indent,
+                        type: child.type
+                    )
+                    block.items[block.items.count - 1].children.append(childBlock)
+                    continue
+                }
+
+                guard listItem(lines[index]) == nil,
+                      !lines[index].trimmingCharacters(in: .whitespaces).isEmpty,
+                      indentationWidth(of: lines[index]) > indent else {
+                    break
+                }
+                block.items[block.items.count - 1].textLines.append(
+                    lines[index].trimmingCharacters(in: .whitespaces)
+                )
+                index += 1
+            }
+        }
+
+        return block
+    }
+
+    private static func renderListBlock(_ block: ListBlock) -> String {
+        let opening: String
+        if block.type == "ol", let start = block.start, start != 1 {
+            opening = "<ol start=\"\(start)\">"
+        } else {
+            opening = "<\(block.type)>"
+        }
+
+        var output = [opening]
+        var expectedNumber = block.start ?? 1
+        for item in block.items {
+            let valueAttribute: String
+            if block.type == "ol",
+               let number = item.number,
+               number != expectedNumber {
+                valueAttribute = " value=\"\(number)\""
+                expectedNumber = number
+            } else {
+                valueAttribute = ""
+            }
+
+            let text = inline(item.textLines.joined(separator: " "))
+            if item.children.isEmpty {
+                output.append("<li\(valueAttribute)>\(text)</li>")
+            } else {
+                let children = item.children.map(renderListBlock).joined(separator: "\n")
+                output.append("<li\(valueAttribute)>\(text)\n\(children)\n</li>")
+            }
+            expectedNumber += 1
+        }
+        output.append("</\(block.type)>")
         return output.joined(separator: "\n")
     }
 
@@ -250,16 +338,42 @@ enum MarkdownRenderer {
         return (hashes.count, line.dropFirst(hashes.count + 1).trimmingCharacters(in: .whitespaces))
     }
 
-    private static func listItem(_ line: String) -> (type: String, text: String, start: Int?)? {
-        if let range = line.range(of: #"^[-*+]\s+"#, options: .regularExpression) {
-            return ("ul", String(line[range.upperBound...]), nil)
+    private static func listItem(_ line: String) -> ParsedListItem? {
+        let indent = indentationWidth(of: line)
+        let content = line.dropFirst(line.prefix { $0 == " " || $0 == "\t" }.count)
+        if let range = content.range(of: #"^[-*+]\s+"#, options: .regularExpression) {
+            return ParsedListItem(
+                indent: indent,
+                type: "ul",
+                text: String(content[range.upperBound...]),
+                number: nil
+            )
         }
-        if let range = line.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
-            let marker = line[..<range.upperBound]
+        if let range = content.range(of: #"^\d+\.\s+"#, options: .regularExpression) {
+            let marker = content[..<range.upperBound]
             let number = Int(marker.prefix { $0.isNumber })
-            return ("ol", String(line[range.upperBound...]), number)
+            return ParsedListItem(
+                indent: indent,
+                type: "ol",
+                text: String(content[range.upperBound...]),
+                number: number
+            )
         }
         return nil
+    }
+
+    private static func indentationWidth(of line: String) -> Int {
+        var width = 0
+        for character in line {
+            if character == " " {
+                width += 1
+            } else if character == "\t" {
+                width += 4 - (width % 4)
+            } else {
+                break
+            }
+        }
+        return width
     }
 
     private static func isTableDivider(_ line: String) -> Bool {

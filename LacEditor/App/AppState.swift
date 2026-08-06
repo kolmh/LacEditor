@@ -142,7 +142,19 @@ enum SidebarPresentation: Equatable {
 @MainActor
 final class AppState: ObservableObject {
     @Published var documents: [EditorDocument] = []
-    @Published var selectedDocumentID: UUID?
+    @Published var selectedDocumentID: UUID? {
+        didSet {
+            guard oldValue != selectedDocumentID,
+                  findReplace.isWorking,
+                  let activeID = findReplace.activeDocumentID,
+                  activeID != selectedDocumentID else { return }
+            documents.first(where: { $0.id == activeID })?.taskCoordinator.cancel(.search)
+            documents.first(where: { $0.id == activeID })?.taskCoordinator.cancel(.replace)
+            findReplace.isWorking = false
+            findReplace.activeDocumentID = nil
+            findReplace.message = "目标标签已切换，查找已取消"
+        }
+    }
     @Published var isSidebarVisible: Bool {
         didSet {
             UserDefaults.standard.set(
@@ -154,41 +166,33 @@ final class AppState: ObservableObject {
     @Published private(set) var isSidebarPreviewVisible = false
     private var isSidebarToggleHovered = false
     private var isSidebarPreviewHovered = false
-    @Published var workspaceURL: URL?
-    @Published var fileTree: [FileTreeNode] = []
-    @Published var isWordWrapEnabled = true
-    @Published var editorFontSize: CGFloat = 14 {
-        didSet {
-            UserDefaults.standard.set(
-                Double(editorFontSize),
-                forKey: "editorFontSize"
-            )
-        }
+    var isWordWrapEnabled: Bool {
+        get { preferences.wordWrapEnabled }
+        set { preferences.wordWrapEnabled = newValue }
     }
-    @Published var isLineNumbersVisible: Bool {
-        didSet {
-            UserDefaults.standard.set(
-                isLineNumbersVisible,
-                forKey: "isLineNumbersVisible"
-            )
-        }
+    var editorFontSize: CGFloat {
+        get { preferences.editorFontSize }
+        set { preferences.editorFontSize = newValue }
     }
-    @Published var isStatusBarVisible: Bool {
-        didSet {
-            UserDefaults.standard.set(
-                isStatusBarVisible,
-                forKey: "isStatusBarVisible"
-            )
-        }
+    var isLineNumbersVisible: Bool {
+        get { preferences.lineNumbersVisible }
+        set { preferences.lineNumbersVisible = newValue }
     }
-    @Published var theme: AppTheme {
-        didSet { UserDefaults.standard.set(theme.rawValue, forKey: "appTheme") }
+    var isStatusBarVisible: Bool {
+        get { preferences.statusBarVisible }
+        set { preferences.statusBarVisible = newValue }
+    }
+    var theme: AppTheme {
+        get { preferences.theme }
+        set { preferences.theme = newValue }
     }
 
     let recentFiles: RecentFilesStore
+    let preferences: AppPreferences
     let findReplace = FindReplaceState()
     let textTransformation = TextTransformationPreviewState()
     weak var hostWindow: NSWindow?
+    weak var windowManager: WindowManager?
     private var findReplaceWindowController: FindReplaceWindowController?
     private var textTransformationWindowController: TextTransformationWindowController?
     private let fileService = FileService()
@@ -196,6 +200,13 @@ final class AppState: ObservableObject {
         label: "com.laceditor.file-reading",
         qos: .userInitiated
     )
+    private let fileOpeningQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "com.laceditor.file-opening"
+        queue.maxConcurrentOperationCount = 1
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
     private let fileWriteQueue = DispatchQueue(
         label: "com.laceditor.file-writing",
         qos: .userInitiated
@@ -209,31 +220,25 @@ final class AppState: ObservableObject {
     }()
     private var documentCancellables: [UUID: AnyCancellable] = [:]
     private var openingFileURLs: Set<URL> = []
+    private var openingOperations: [URL: Operation] = [:]
     private var cancelledOpeningURLs: Set<URL> = []
     private var sidebarPreviewDismissWorkItem: DispatchWorkItem?
-    private let defaultFontSize: CGFloat = 14
     private var contentChangeObserver: NSObjectProtocol?
+    private var preferencesCancellable: AnyCancellable?
 
     init(
         initialDocument: EditorDocument? = nil,
-        recentFiles: RecentFilesStore
+        recentFiles: RecentFilesStore,
+        preferences: AppPreferences
     ) {
         self.recentFiles = recentFiles
-        let storedFontSize = UserDefaults.standard.object(
-            forKey: "editorFontSize"
-        ) as? Double
-        editorFontSize = min(max(CGFloat(storedFontSize ?? 14), 9), 32)
+        self.preferences = preferences
         isSidebarVisible = UserDefaults.standard.object(
             forKey: "isSidebarVisible"
         ) as? Bool ?? true
-        isLineNumbersVisible = UserDefaults.standard.object(
-            forKey: "isLineNumbersVisible"
-        ) as? Bool ?? true
-        isStatusBarVisible = UserDefaults.standard.object(
-            forKey: "isStatusBarVisible"
-        ) as? Bool ?? true
-        let storedTheme = UserDefaults.standard.string(forKey: "appTheme")
-        theme = AppTheme(rawValue: storedTheme ?? "") ?? .system
+        preferencesCancellable = preferences.objectWillChange.sink { [weak self] in
+            self?.objectWillChange.send()
+        }
         if let initialDocument {
             documents = [initialDocument]
             selectedDocumentID = initialDocument.id
@@ -400,12 +405,26 @@ final class AppState: ObservableObject {
     }
 
     func openFile(_ url: URL) {
+        if let windowManager {
+            windowManager.openFile(url, preferredState: self)
+            return
+        }
+        beginOpeningFile(url)
+    }
+
+    func beginOpeningFile(_ url: URL) {
         let normalized = url.standardizedFileURL
+        var retryPlaceholder: EditorDocument?
         if let existing = documents.first(where: {
-            $0.url?.standardizedFileURL == normalized
+            $0.fileIdentity?.matches(DocumentFileIdentity.resolve(normalized)) == true
         }) {
             selectedDocumentID = existing.id
-            return
+            if case .failed = existing.ioState {
+                retryPlaceholder = existing
+                openingFileURLs.remove(normalized)
+            } else {
+                return
+            }
         }
         guard openingFileURLs.insert(normalized).inserted else { return }
 
@@ -416,22 +435,31 @@ final class AppState: ObservableObject {
             return
         }
 
-        let placeholder = EditorDocument(
-            url: normalized,
-            language: EditorLanguage.infer(from: normalized),
-            byteCount: byteCount,
-            performanceProfile: profile
-        )
-        placeholder.ioState = .opening
-        if documents.count == 1, let blank = documents.first, blank.isDisposableBlank {
-            stopObserving(blank)
-            documents.removeAll()
+        let placeholder: EditorDocument
+        if let retryPlaceholder {
+            placeholder = retryPlaceholder
+            placeholder.ioState = .opening
+            placeholder.updatePerformanceProfile(byteCount: byteCount, lineCount: 0)
+        } else {
+            placeholder = EditorDocument(
+                url: normalized,
+                language: EditorLanguage.infer(from: normalized),
+                byteCount: byteCount,
+                performanceProfile: profile
+            )
+            placeholder.ioState = .opening
+            if documents.count == 1, let blank = documents.first, blank.isDisposableBlank {
+                stopObserving(blank)
+                documents.removeAll()
+            }
+            documents.append(placeholder)
+            observe(placeholder)
         }
-        documents.append(placeholder)
-        observe(placeholder)
         selectedDocumentID = placeholder.id
 
-        fileReadQueue.async { [weak self] in
+        let operation = BlockOperation()
+        operation.addExecutionBlock { [weak self, weak operation] in
+            guard operation?.isCancelled == false else { return }
             let readSignpostID = OSSignpostID(log: filePerformanceLog)
             os_signpost(
                 .begin,
@@ -446,10 +474,14 @@ final class AppState: ObservableObject {
                 name: "FileOpen",
                 signpostID: readSignpostID
             )
-            DispatchQueue.main.async { [weak self] in
+            guard operation?.isCancelled == false else { return }
+            DispatchQueue.main.async { [weak self, weak operation] in
+                guard operation?.isCancelled == false else { return }
                 self?.finishOpeningFile(normalized, result: result)
             }
         }
+        openingOperations[normalized] = operation
+        fileOpeningQueue.addOperation(operation)
     }
 
     private func finishOpeningFile(
@@ -457,6 +489,7 @@ final class AppState: ObservableObject {
         result: Result<PreparedFileRead, Error>
     ) {
         openingFileURLs.remove(url)
+        openingOperations.removeValue(forKey: url)
         if cancelledOpeningURLs.remove(url) != nil {
             removeOpeningPlaceholder(for: url)
             return
@@ -468,11 +501,17 @@ final class AppState: ObservableObject {
             case let .decoded(value):
                 decoded = value
             case let .needsEncoding(data, byteCount):
-                decoded = try fileService.decodeUsingSelectedEncoding(
+                guard let choice = fileService.chooseEncoding(for: url) else {
+                    removeOpeningPlaceholder(for: url)
+                    return
+                }
+                decodeOpeningFileInBackground(
                     data,
-                    from: url,
-                    byteCount: byteCount
+                    choice: choice,
+                    byteCount: byteCount,
+                    url: url
                 )
+                return
             }
             insertOpenedFile(decoded, at: url)
         } catch CocoaError.userCancelled {
@@ -488,8 +527,53 @@ final class AppState: ObservableObject {
         }
     }
 
+    private func decodeOpeningFileInBackground(
+        _ data: Data,
+        choice: FileEncodingChoice,
+        byteCount: Int,
+        url: URL
+    ) {
+        openingFileURLs.insert(url)
+        let operation = BlockOperation()
+        operation.addExecutionBlock { [weak self, weak operation] in
+            guard operation?.isCancelled == false else { return }
+            let result = Result {
+                try FileService.decode(
+                    data,
+                    encoding: choice.encoding,
+                    encodingName: choice.name,
+                    byteCount: byteCount
+                )
+            }
+            guard operation?.isCancelled == false else { return }
+            DispatchQueue.main.async { [weak self, weak operation] in
+                guard let self else { return }
+                guard operation?.isCancelled == false else { return }
+                self.openingFileURLs.remove(url)
+                self.openingOperations.removeValue(forKey: url)
+                if self.cancelledOpeningURLs.remove(url) != nil {
+                    self.removeOpeningPlaceholder(for: url)
+                    return
+                }
+                do {
+                    self.insertOpenedFile(try result.get(), at: url)
+                } catch {
+                    if let placeholder = self.documents.first(where: {
+                        $0.url?.standardizedFileURL == url && $0.ioState == .opening
+                    }) {
+                        placeholder.ioState = .failed(error.localizedDescription)
+                    }
+                    self.presentError(title: "无法打开文件", error: error)
+                }
+            }
+        }
+        openingOperations[url] = operation
+        fileOpeningQueue.addOperation(operation)
+    }
+
     func cancelOpening(_ document: EditorDocument) {
         guard document.ioState == .opening, let url = document.url else { return }
+        openingOperations.removeValue(forKey: url.standardizedFileURL)?.cancel()
         cancelledOpeningURLs.insert(url.standardizedFileURL)
         removeOpeningPlaceholder(for: url.standardizedFileURL)
     }
@@ -500,7 +584,10 @@ final class AppState: ObservableObject {
         }) {
             if existing.ioState == .opening {
                 existing.text = decoded.text
-                existing.encodingName = decoded.encodingName
+                existing.updateFileEncoding(decoded.encoding)
+                existing.updateFileRevisionSnapshot(
+                    try? FileRevisionSnapshot.capture(url)
+                )
                 existing.ioState = .idle
                 existing.updatePerformanceProfile(
                     byteCount: decoded.byteCount,
@@ -518,7 +605,8 @@ final class AppState: ObservableObject {
             text: decoded.text,
             url: url,
             language: EditorLanguage.infer(from: url),
-            encodingName: decoded.encodingName,
+            fileEncoding: decoded.encoding,
+            fileRevisionSnapshot: try? FileRevisionSnapshot.capture(url),
             byteCount: decoded.byteCount,
             lineCount: decoded.lineCount
         )
@@ -534,12 +622,6 @@ final class AppState: ObservableObject {
         observe(document)
     }
 
-    func openFolder() {
-        guard let url = fileService.chooseFolder() else { return }
-        workspaceURL = url
-        fileTree = fileService.loadTree(at: url)
-    }
-
     @discardableResult
     func save(_ document: EditorDocument? = nil) -> Bool {
         guard let document = document ?? selectedDocument else { return false }
@@ -551,10 +633,37 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func saveAs(_ document: EditorDocument? = nil) -> Bool {
-        guard let document = document ?? selectedDocument,
-              let url = fileService.chooseSaveURL(suggestedName: suggestedFilename(for: document))
-        else { return false }
-        return write(document, to: url)
+        guard let document = document ?? selectedDocument else { return false }
+        return saveAs(document, encoding: document.fileEncoding, completion: nil)
+    }
+
+    private func saveAs(
+        _ document: EditorDocument,
+        encoding: String.Encoding,
+        completion: ((Bool) -> Void)?
+    ) -> Bool {
+        guard let url = fileService.chooseSaveURL(
+            suggestedName: suggestedFilename(for: document)
+        ) else {
+            completion?(false)
+            return false
+        }
+        if let conflict = windowManager?.conflictingDocument(
+            at: url,
+            excluding: document.id
+        ) {
+            windowManager?.focus(conflict.document, in: conflict.state)
+            let error = NSError(
+                domain: "LacEditor",
+                code: 409,
+                userInfo: [NSLocalizedDescriptionKey: "该文件已在 LacEditor 的另一个标签中打开。"]
+            )
+            presentError(title: "无法另存为", error: error)
+            completion?(false)
+            return false
+        }
+        document.updateFileEncoding(encoding)
+        return write(document, to: url, completion: completion)
     }
 
     func closeSelectedDocument() {
@@ -567,26 +676,29 @@ final class AppState: ObservableObject {
             hostWindow?.performClose(nil)
             return
         }
-        guard confirmClosing(document) else { return }
-        removeDocument(document)
+        confirmClosing(document) { [weak self, weak document] shouldClose in
+            guard shouldClose, let self, let document else { return }
+            self.removeDocument(document)
+        }
     }
 
     func closeOtherDocuments(keeping document: EditorDocument) {
         let others = documents.filter { $0.id != document.id }
-        guard others.allSatisfy(confirmClosing) else { return }
-        others.forEach(stopObserving)
-        documents = [document]
-        selectedDocumentID = document.id
+        closeDocumentsSequentially(others) { [weak self, weak document] completed in
+            guard completed, let self, let document else { return }
+            self.documents = [document]
+            self.selectedDocumentID = document.id
+        }
     }
 
     func closeDocumentsToRight(of document: EditorDocument) {
         guard let index = documents.firstIndex(where: { $0.id == document.id }),
               index + 1 < documents.count else { return }
         let right = Array(documents[(index + 1)...])
-        guard right.allSatisfy(confirmClosing) else { return }
-        right.forEach(stopObserving)
-        documents.removeSubrange((index + 1)...)
-        selectedDocumentID = document.id
+        closeDocumentsSequentially(right) { [weak self, weak document] completed in
+            guard completed, let self, let document else { return }
+            self.selectedDocumentID = document.id
+        }
     }
 
     func selectNextTab() {
@@ -758,8 +870,22 @@ final class AppState: ObservableObject {
             return
         }
 
+        let inputByteCount = snapshot.text.utf8.count
+        guard inputByteCount <= TextCodecService.maximumInputByteLimit else {
+            document.statusMessage = "选区超过 32 MB，请拆分后再转换"
+            return
+        }
+        if inputByteCount > TextCodecService.warningInputByteLimit,
+           !confirmLargeTextTransformation(
+                byteCount: inputByteCount,
+                operation: operation
+           ) {
+            document.statusMessage = nil
+            return
+        }
+
         document.statusMessage = "正在转换文本…"
-        performDocumentTask(document, kind: .textTransformation) {
+        performCancellableDocumentTask(document, kind: .textTransformation) { isCancelled in
             Result { () -> TextTransformationPreview in
                 let detected = operation == .smartDecode
                     ? TextCodecService.detect(
@@ -777,7 +903,8 @@ final class AppState: ObservableObject {
                 } else {
                     output = try TextCodecService.transform(
                         snapshot.text,
-                        operation: resolvedOperation
+                        operation: resolvedOperation,
+                        isCancelled: isCancelled
                     )
                 }
                 return TextTransformationPreview(
@@ -851,6 +978,34 @@ final class AppState: ObservableObject {
         textTransformationWindowController?.dismiss()
     }
 
+    func closeAuxiliaryWindows() {
+        dismissFindReplace()
+        openingOperations.values.forEach { $0.cancel() }
+        openingOperations.removeAll()
+        documentTaskQueue.cancelAllOperations()
+        documents.forEach { $0.taskCoordinator.cancelAll() }
+        textTransformationWindowController?.dispose()
+        textTransformationWindowController = nil
+        textTransformation.clear()
+    }
+
+    private func confirmLargeTextTransformation(
+        byteCount: Int,
+        operation: TextTransformationOperation
+    ) -> Bool {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        let multiplier = operation == .urlEncodeComponent ? 3 : 2
+        let estimated = Int64(byteCount * multiplier)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "转换较大的文本选区？"
+        alert.informativeText = "选区大小为 \(formatter.string(fromByteCount: Int64(byteCount)))，预计最多产生约 \(formatter.string(fromByteCount: estimated)) 的结果。转换期间可继续使用其他标签。"
+        alert.addButton(withTitle: "继续转换")
+        alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     func presentFindReplace(mode: FindReplaceMode) {
         findReplace.mode = mode
         findReplace.message = nil
@@ -863,6 +1018,13 @@ final class AppState: ObservableObject {
     }
 
     func dismissFindReplace() {
+        if let documentID = findReplace.activeDocumentID,
+           let document = documents.first(where: { $0.id == documentID }) {
+            document.taskCoordinator.cancel(.search)
+            document.taskCoordinator.cancel(.replace)
+        }
+        findReplace.isWorking = false
+        findReplace.activeDocumentID = nil
         findReplaceWindowController?.dismiss()
         findReplaceWindowController = nil
     }
@@ -955,17 +1117,21 @@ final class AppState: ObservableObject {
         let rawQuery = findReplace.query
         let caseSensitive = findReplace.isCaseSensitive
         findReplace.isWorking = true
+        findReplace.activeDocumentID = document.id
         findReplace.message = "正在替换…"
-        performDocumentTask(document, kind: .replace) {
+        performCancellableDocumentTask(document, kind: .replace) { isCancelled in
             TextSearchService.replacingAll(
                 in: source,
                 query: query,
                 replacement: replacement,
-                caseSensitive: caseSensitive
+                caseSensitive: caseSensitive,
+                isCancelled: isCancelled
             )
         } completion: { [weak self, weak document] result in
             guard let self, let document else { return }
+            guard self.findReplace.activeDocumentID == document.id else { return }
             self.findReplace.isWorking = false
+            self.findReplace.activeDocumentID = nil
             guard self.findReplace.query == rawQuery,
                   self.findReplace.isCaseSensitive == caseSensitive,
                   self.isTaskResultCurrent(document, revision: revision) else {
@@ -987,10 +1153,13 @@ final class AppState: ObservableObject {
     }
 
     func cancelFindReplaceTask() {
-        guard findReplace.isWorking, let document = selectedDocument else { return }
+        guard findReplace.isWorking,
+              let documentID = findReplace.activeDocumentID,
+              let document = documents.first(where: { $0.id == documentID }) else { return }
         document.taskCoordinator.cancel(.search)
         document.taskCoordinator.cancel(.replace)
         findReplace.isWorking = false
+        findReplace.activeDocumentID = nil
         findReplace.message = "已取消"
     }
 
@@ -1003,11 +1172,11 @@ final class AppState: ObservableObject {
     }
 
     func resetFontSize() {
-        editorFontSize = defaultFontSize
+        editorFontSize = AppPreferences.defaultFontSize
     }
 
     var isUsingDefaultFontSize: Bool {
-        editorFontSize == defaultFontSize
+        editorFontSize == AppPreferences.defaultFontSize
     }
 
     func updateRenamedFileReference(from oldURL: URL, to newURL: URL) {
@@ -1016,8 +1185,8 @@ final class AppState: ObservableObject {
         }
     }
 
-    func confirmClosingAllDocuments() -> Bool {
-        documents.allSatisfy(confirmClosing)
+    func confirmClosingAllDocuments(completion: @escaping (Bool) -> Void) {
+        closeDocumentsSequentially(documents, removesDocuments: false, completion: completion)
     }
 
     private func observe(_ document: EditorDocument) {
@@ -1081,6 +1250,7 @@ final class AppState: ObservableObject {
         let rawQuery = findReplace.query
         let caseSensitive = findReplace.isCaseSensitive
         findReplace.isWorking = true
+        findReplace.activeDocumentID = document.id
         findReplace.message = "正在查找…"
         performDocumentTask(document, kind: .search) {
             if backwards {
@@ -1100,7 +1270,9 @@ final class AppState: ObservableObject {
             }
         } completion: { [weak self, weak document] range in
             guard let self, let document else { return }
+            guard self.findReplace.activeDocumentID == document.id else { return }
             self.findReplace.isWorking = false
+            self.findReplace.activeDocumentID = nil
             guard self.findReplace.query == rawQuery,
                   self.findReplace.isCaseSensitive == caseSensitive,
                   self.isTaskResultCurrent(document, revision: revision) else {
@@ -1140,6 +1312,33 @@ final class AppState: ObservableObject {
                 name: documentTaskSignpostName(for: kind),
                 signpostID: signpostID
             )
+            guard !operation.isCancelled,
+                  document.taskCoordinator.isCurrent(generation, for: kind) else { return }
+            DispatchQueue.main.async { [weak document] in
+                guard let document,
+                      document.taskCoordinator.isCurrent(generation, for: kind) else { return }
+                document.taskCoordinator.finish(kind, generation: generation)
+                completion(result)
+            }
+        }
+        document.taskCoordinator.attach(operation, kind: kind, generation: generation)
+        documentTaskQueue.addOperation(operation)
+    }
+
+    private func performCancellableDocumentTask<Result>(
+        _ document: EditorDocument,
+        kind: DocumentTaskCoordinator.Kind,
+        work: @escaping (@escaping () -> Bool) -> Result,
+        completion: @escaping (Result) -> Void
+    ) {
+        let generation = document.taskCoordinator.begin(kind)
+        let operation = BlockOperation()
+        operation.addExecutionBlock { [weak document, weak operation] in
+            guard let document, let operation, !operation.isCancelled else { return }
+            let signpostID = OSSignpostID(log: taskPerformanceLog)
+            os_signpost(.begin, log: taskPerformanceLog, name: documentTaskSignpostName(for: kind), signpostID: signpostID)
+            let result = work { operation.isCancelled }
+            os_signpost(.end, log: taskPerformanceLog, name: documentTaskSignpostName(for: kind), signpostID: signpostID)
             guard !operation.isCancelled,
                   document.taskCoordinator.isCurrent(generation, for: kind) else { return }
             DispatchQueue.main.async { [weak document] in
@@ -1200,9 +1399,27 @@ final class AppState: ObservableObject {
         document.refreshDirtyState()
     }
 
-    private func write(_ document: EditorDocument, to url: URL) -> Bool {
+    private func write(
+        _ document: EditorDocument,
+        to url: URL,
+        bypassExternalConflict: Bool = false,
+        completion: ((Bool) -> Void)? = nil
+    ) -> Bool {
+        guard document.ioState != .saving else {
+            document.statusMessage = "已有保存任务正在进行"
+            completion?(false)
+            return false
+        }
+        if !bypassExternalConflict,
+           url.standardizedFileURL == document.url?.standardizedFileURL,
+           hasExternalFileConflict(document, at: url) {
+            resolveExternalFileConflict(for: document, at: url, completion: completion)
+            return false
+        }
         let text = document.synchronizedText()
         let revision = document.textRevision
+        let encoding = document.fileEncoding
+        let encodingName = document.encodingName
         let saveGeneration = document.taskCoordinator.begin(.save)
         document.ioState = .saving
         document.statusMessage = "正在保存…"
@@ -1214,7 +1431,33 @@ final class AppState: ObservableObject {
                 name: "FileSave",
                 signpostID: signpostID
             )
-            let result = Result { try FileService.writeUTF8(text, to: url) }
+            let saveResult: DocumentSaveResult
+            let saveError: Error?
+            do {
+                try FileService.write(
+                    text,
+                    to: url,
+                    encoding: encoding,
+                    encodingName: encodingName
+                )
+                saveResult = DocumentSaveResult(
+                    targetURL: url,
+                    encoding: encoding,
+                    snapshotRevision: revision,
+                    fileRevisionSnapshot: try FileRevisionSnapshot.capture(url),
+                    errorDescription: nil
+                )
+                saveError = nil
+            } catch {
+                saveResult = DocumentSaveResult(
+                    targetURL: url,
+                    encoding: encoding,
+                    snapshotRevision: revision,
+                    fileRevisionSnapshot: nil,
+                    errorDescription: error.localizedDescription
+                )
+                saveError = error
+            }
             os_signpost(
                 .end,
                 log: filePerformanceLog,
@@ -1228,29 +1471,205 @@ final class AppState: ObservableObject {
                     for: .save
                 ) else { return }
                 document.taskCoordinator.finish(.save, generation: saveGeneration)
-                switch result {
-                case .success:
+                if saveResult.succeeded,
+                   let fileSnapshot = saveResult.fileRevisionSnapshot {
                     document.updateLocation(to: url)
-                    document.encodingName = "UTF-8"
+                    document.updateFileEncoding(encoding)
+                    document.updateFileRevisionSnapshot(fileSnapshot)
                     document.markSaved(snapshot: text, revision: revision)
                     document.ioState = .idle
                     document.statusMessage = document.isDirty
                         ? "已保存先前版本，仍有未保存更改"
                         : nil
                     self.recentFiles.record(url)
-                case let .failure(error):
-                    document.ioState = .failed(error.localizedDescription)
-                    document.statusMessage = "保存失败：\(error.localizedDescription)"
-                    self.presentError(title: "无法保存文件", error: error)
+                    completion?(!document.isDirty)
+                } else {
+                    let description = saveResult.errorDescription ?? "无法取得保存后的文件状态"
+                    document.ioState = .failed(description)
+                    document.statusMessage = "保存失败：\(description)"
+                    if let saveError {
+                        self.handleSaveError(
+                            saveError,
+                            for: document,
+                            completion: completion
+                        )
+                    } else {
+                        completion?(false)
+                    }
                 }
             }
         }
         return true
     }
 
-    private func confirmClosing(_ document: EditorDocument) -> Bool {
+    private func hasExternalFileConflict(
+        _ document: EditorDocument,
+        at url: URL
+    ) -> Bool {
+        guard let baseline = document.fileRevisionSnapshot else { return false }
+        guard let current = try? FileRevisionSnapshot.capture(url) else { return true }
+        return current != baseline
+    }
+
+    private func resolveExternalFileConflict(
+        for document: EditorDocument,
+        at url: URL,
+        completion: ((Bool) -> Void)?
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "磁盘上的文件已发生变化"
+        alert.informativeText = "为避免覆盖其他程序的修改，LacEditor 已停止保存。你可以重新载入磁盘版本、另存为新文件，或明确覆盖。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "重新载入")
+        alert.addButton(withTitle: "另存为")
+        alert.addButton(withTitle: "仍然覆盖")
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self, weak document] response in
+            guard let self, let document else { return }
+            switch response {
+            case .alertSecondButtonReturn:
+                self.reloadFromDisk(document, at: url)
+                completion?(false)
+            case .alertThirdButtonReturn:
+                _ = self.saveAs(
+                    document,
+                    encoding: document.fileEncoding,
+                    completion: completion
+                )
+            case NSApplication.ModalResponse(rawValue: NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1):
+                _ = self.write(
+                    document,
+                    to: url,
+                    bypassExternalConflict: true,
+                    completion: completion
+                )
+            default:
+                completion?(false)
+                break
+            }
+        }
+        if let hostWindow {
+            alert.beginSheetModal(for: hostWindow, completionHandler: handle)
+        } else {
+            handle(alert.runModal())
+        }
+    }
+
+    private func reloadFromDisk(_ document: EditorDocument, at url: URL) {
+        let expectedRevision = document.textRevision
+        document.ioState = .opening
+        fileReadQueue.async { [weak self, weak document] in
+            let result = Result { try FileService.prepareRead(url) }
+            DispatchQueue.main.async {
+                guard let self, let document else { return }
+                do {
+                    let prepared = try result.get()
+                    switch prepared {
+                    case let .decoded(decoded):
+                        guard document.textRevision == expectedRevision else {
+                            document.ioState = .idle
+                            document.statusMessage = "重新载入期间内容已变化，已保留本地修改"
+                            return
+                        }
+                        document.text = decoded.text
+                        document.updateFileEncoding(decoded.encoding)
+                        document.updateFileRevisionSnapshot(try? FileRevisionSnapshot.capture(url))
+                        document.markSaved()
+                        document.ioState = .idle
+                    case let .needsEncoding(data, byteCount):
+                        guard let choice = self.fileService.chooseEncoding(for: url) else {
+                            document.ioState = .idle
+                            return
+                        }
+                        self.decodeReloadInBackground(
+                            data,
+                            choice: choice,
+                            byteCount: byteCount,
+                            document: document,
+                            url: url,
+                            expectedRevision: expectedRevision
+                        )
+                    }
+                } catch {
+                    document.ioState = .failed(error.localizedDescription)
+                    self.presentError(title: "无法重新载入文件", error: error)
+                }
+            }
+        }
+    }
+
+    private func decodeReloadInBackground(
+        _ data: Data,
+        choice: FileEncodingChoice,
+        byteCount: Int,
+        document: EditorDocument,
+        url: URL,
+        expectedRevision: UInt
+    ) {
+        fileReadQueue.async { [weak self, weak document] in
+            let result = Result {
+                try FileService.decode(
+                    data,
+                    encoding: choice.encoding,
+                    encodingName: choice.name,
+                    byteCount: byteCount
+                )
+            }
+            DispatchQueue.main.async {
+                guard let self, let document else { return }
+                do {
+                    let decoded = try result.get()
+                    guard document.textRevision == expectedRevision else {
+                        document.ioState = .idle
+                        document.statusMessage = "重新载入期间内容已变化，已保留本地修改"
+                        return
+                    }
+                    document.text = decoded.text
+                    document.updateFileEncoding(decoded.encoding)
+                    document.updateFileRevisionSnapshot(try? FileRevisionSnapshot.capture(url))
+                    document.markSaved()
+                    document.ioState = .idle
+                } catch {
+                    document.ioState = .failed(error.localizedDescription)
+                    self.presentError(title: "无法重新载入文件", error: error)
+                }
+            }
+        }
+    }
+
+    private func handleSaveError(
+        _ error: Error,
+        for document: EditorDocument,
+        completion: ((Bool) -> Void)?
+    ) {
+        guard case FileServiceError.unrepresentableCharacters = error else {
+            presentError(title: "无法保存文件", error: error)
+            completion?(false)
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "当前编码无法保存这些字符"
+        alert.informativeText = "原文件没有被覆盖。你可以取消，或另存为 UTF-8 文件。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "另存为 UTF-8")
+        let response = alert.runModal()
+        guard response == .alertSecondButtonReturn else {
+            completion?(false)
+            return
+        }
+        _ = saveAs(document, encoding: .utf8, completion: completion)
+    }
+
+    private func confirmClosing(
+        _ document: EditorDocument,
+        completion: @escaping (Bool) -> Void
+    ) {
         document.refreshDirtyState()
-        guard document.isDirty else { return true }
+        guard document.isDirty else {
+            completion(true)
+            return
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "要保存对“\(document.displayName)”的更改吗？"
@@ -1258,45 +1677,77 @@ final class AppState: ObservableObject {
         alert.addButton(withTitle: "保存")
         alert.addButton(withTitle: "不保存")
         alert.addButton(withTitle: "取消")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            return saveSynchronouslyForClosing(document)
-        case .alertSecondButtonReturn:
-            return true
-        default:
-            return false
+        let handle: (NSApplication.ModalResponse) -> Void = { [weak self, weak document] response in
+            guard let self, let document else {
+                completion(false)
+                return
+            }
+            switch response {
+            case .alertFirstButtonReturn:
+                self.saveForClosing(document, completion: completion)
+            case .alertSecondButtonReturn:
+                completion(true)
+            default:
+                completion(false)
+            }
+        }
+        if let hostWindow {
+            alert.beginSheetModal(for: hostWindow, completionHandler: handle)
+        } else {
+            handle(alert.runModal())
         }
     }
 
-    private func saveSynchronouslyForClosing(_ document: EditorDocument) -> Bool {
+    private func saveForClosing(
+        _ document: EditorDocument,
+        completion: @escaping (Bool) -> Void
+    ) {
         let targetURL: URL
         if let url = document.url {
             targetURL = url
         } else {
             guard let url = fileService.chooseSaveURL(
                 suggestedName: suggestedFilename(for: document)
-            ) else { return false }
+            ) else {
+                completion(false)
+                return
+            }
             targetURL = url
         }
-        do {
-            let snapshot = document.synchronizedText()
-            document.taskCoordinator.cancel(.save)
-            var writeResult: Result<Void, Error>!
-            fileWriteQueue.sync {
-                writeResult = Result {
-                    try FileService.writeUTF8(snapshot, to: targetURL)
-                }
+        if let conflict = windowManager?.conflictingDocument(
+            at: targetURL,
+            excluding: document.id
+        ) {
+            windowManager?.focus(conflict.document, in: conflict.state)
+            completion(false)
+            return
+        }
+        _ = write(document, to: targetURL, completion: completion)
+    }
+
+    private func closeDocumentsSequentially(
+        _ queue: [EditorDocument],
+        removesDocuments: Bool = true,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let document = queue.first else {
+            completion(true)
+            return
+        }
+        confirmClosing(document) { [weak self] shouldClose in
+            guard let self, shouldClose else {
+                completion(false)
+                return
             }
-            try writeResult.get()
-            document.updateLocation(to: targetURL)
-            document.encodingName = "UTF-8"
-            document.markSaved()
-            document.ioState = .idle
-            recentFiles.record(targetURL)
-            return true
-        } catch {
-            presentError(title: "无法保存文件", error: error)
-            return false
+            if removesDocuments,
+               self.documents.contains(where: { $0.id == document.id }) {
+                self.removeDocument(document)
+            }
+            self.closeDocumentsSequentially(
+                Array(queue.dropFirst()),
+                removesDocuments: removesDocuments,
+                completion: completion
+            )
         }
     }
 

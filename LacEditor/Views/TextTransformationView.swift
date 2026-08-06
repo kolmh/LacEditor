@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+enum TextTransformationWindowIdentity {
+    static let identifier = NSUserInterfaceItemIdentifier(
+        "LacEditor.TextTransformationWindow"
+    )
+}
+
 struct TextTransformationPreview: Equatable {
     let documentID: UUID
     let range: NSRange
@@ -142,6 +148,7 @@ final class TextTransformationWindowController: NSWindowController, NSWindowDele
         super.init(window: panel)
         state = appState.textTransformation
         panel.title = "编码与解码"
+        panel.identifier = TextTransformationWindowIdentity.identifier
         panel.isReleasedWhenClosed = false
         panel.animationBehavior = .documentWindow
         panel.collectionBehavior.insert(.fullScreenAuxiliary)
@@ -170,6 +177,14 @@ final class TextTransformationWindowController: NSWindowController, NSWindowDele
     func dismiss() {
         window?.orderOut(nil)
         state?.clear()
+    }
+
+    func dispose() {
+        window?.delegate = nil
+        window?.contentViewController = nil
+        window?.close()
+        state?.clear()
+        state = nil
     }
 
     func windowWillClose(_ notification: Notification) {

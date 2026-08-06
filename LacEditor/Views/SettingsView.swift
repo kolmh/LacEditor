@@ -74,10 +74,21 @@ struct SettingsView: View {
             }
             .padding(.top, 22)
 
-            Spacer(minLength: 24)
+            Spacer(minLength: 20)
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Label("LacEditor", systemImage: "info.circle")
+                Spacer()
+                Text(versionDescription)
+            }
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.top, 14)
         }
         .padding(28)
-        .frame(width: 540, height: 410)
+        .frame(width: 540, height: 440)
     }
 
     private func settingLabel(title: String, detail: String) -> some View {
@@ -90,5 +101,20 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(width: 205, alignment: .leading)
+    }
+
+    private var versionDescription: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String
+        let build = info?["CFBundleVersion"] as? String
+
+        switch (version, build) {
+        case let (.some(version), .some(build)):
+            return "版本 \(version)（构建 \(build)）"
+        case let (.some(version), .none):
+            return "版本 \(version)"
+        default:
+            return "开发版本"
+        }
     }
 }
