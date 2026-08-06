@@ -262,7 +262,6 @@ struct EditorTextView: NSViewRepresentable {
         private var highlightedFontSize: CGFloat?
         private var highlightedRange: NSRange?
         private var rulerRefreshWorkItem: DispatchWorkItem?
-        private var rulerResizeRefreshWorkItem: DispatchWorkItem?
         private var rulerRefreshNeedsLayout = false
         private var selectionVisibilityWorkItem: DispatchWorkItem?
         private var textCodecSuggestionWorkItem: DispatchWorkItem?
@@ -278,6 +277,11 @@ struct EditorTextView: NSViewRepresentable {
         }()
         private var pendingListNormalizationLocation: Int?
         private var lastViewportOriginY: CGFloat = 0
+        private var lastClipBoundsOrigin: NSPoint?
+        private var lastClipBoundsSize: NSSize?
+        private var liveResizeLayoutWorkItem: DispatchWorkItem?
+        private var pendingLiveResizeWordWrap: Bool?
+        private var isLiveResizing = false
         private let liveTextProviderID = UUID()
         private var pendingSelectionScrollOriginY: CGFloat?
         private var pendingOffscreenEditAnchor: Int?
@@ -348,7 +352,7 @@ struct EditorTextView: NSViewRepresentable {
             delimiterMatchQueue.cancelAllOperations()
             document.taskCoordinator.cancel(.delimiterMatch)
             rulerRefreshWorkItem?.cancel()
-            rulerResizeRefreshWorkItem?.cancel()
+            liveResizeLayoutWorkItem?.cancel()
             selectionVisibilityWorkItem?.cancel()
             textCodecSuggestionWorkItem?.cancel()
             observerTokens.forEach(NotificationCenter.default.removeObserver)
@@ -362,7 +366,24 @@ struct EditorTextView: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in
                 guard let self, isActive else { return }
+                let bounds = scrollView.contentView.bounds
+                let sizeChanged = lastClipBoundsSize.map {
+                    abs($0.width - bounds.width) > 0.5
+                        || abs($0.height - bounds.height) > 0.5
+                } ?? true
+                let originChanged = lastClipBoundsOrigin.map {
+                    abs($0.x - bounds.origin.x) > 0.5
+                        || abs($0.y - bounds.origin.y) > 0.5
+                } ?? true
+                lastClipBoundsSize = bounds.size
+                lastClipBoundsOrigin = bounds.origin
+
                 resetHorizontalScrollIfNeeded()
+                if sizeChanged {
+                    scheduleResizeLayout(wordWrap: wordWrap)
+                    return
+                }
+                guard originChanged else { return }
                 refreshRulerForViewportChange()
                 scheduleHighlight()
                 scheduleDirectionalLayoutPrefetch()
@@ -373,7 +394,16 @@ struct EditorTextView: NSViewRepresentable {
                 queue: .main
             ) { [weak self] _ in
                 guard let self, isActive else { return }
-                updateLayout(wordWrap: wordWrap)
+                scheduleResizeLayout(wordWrap: wordWrap)
+            })
+            observerTokens.append(NotificationCenter.default.addObserver(
+                forName: NSWindow.didEndLiveResizeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self, weak scrollView] notification in
+                guard let self, let scrollView,
+                      notification.object as? NSWindow === scrollView.window else { return }
+                finishLiveResize()
             })
             observerTokens.append(NotificationCenter.default.addObserver(
                 forName: EditorCommandNotification.revealSelection,
@@ -558,6 +588,18 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         func updateLayout(wordWrap: Bool, force: Bool = false) {
+            if !force, scrollView?.window?.inLiveResize == true {
+                scheduleResizeLayout(wordWrap: wordWrap)
+                return
+            }
+            applyLayout(wordWrap: wordWrap, force: force, duringLiveResize: false)
+        }
+
+        private func applyLayout(
+            wordWrap: Bool,
+            force: Bool,
+            duringLiveResize: Bool
+        ) {
             guard isActive || force else {
                 self.wordWrap = wordWrap
                 return
@@ -608,8 +650,10 @@ struct EditorTextView: NSViewRepresentable {
             scrollView.horizontalScrollElasticity = wordWrap ? .none : .automatic
             resetHorizontalScrollIfNeeded()
             textView.needsDisplay = true
-            ensureVisibleLayout()
-            scheduleRulerRefreshAfterResize()
+            ruler?.requestRedraw()
+            if !duringLiveResize {
+                ensureVisibleLayout()
+            }
         }
 
         func updatePerformanceFeatures() {
@@ -627,18 +671,66 @@ struct EditorTextView: NSViewRepresentable {
             if !document.isFoldingEnabled { clearFold() }
         }
 
-        private func scheduleRulerRefreshAfterResize() {
-            rulerResizeRefreshWorkItem?.cancel()
-            let workItem = DispatchWorkItem { [weak self] in
-                guard let self, let ruler else { return }
-                rulerResizeRefreshWorkItem = nil
-                ruler.invalidateHashMarks()
-                ruler.setNeedsDisplay(ruler.bounds)
+        private func scheduleResizeLayout(wordWrap: Bool) {
+            pendingLiveResizeWordWrap = wordWrap
+            if scrollView?.window?.inLiveResize == true {
+                beginLiveResizeIfNeeded()
             }
-            rulerResizeRefreshWorkItem = workItem
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + 0.12,
-                execute: workItem
+            guard liveResizeLayoutWorkItem == nil else { return }
+            let workItem = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                liveResizeLayoutWorkItem = nil
+                let nextWordWrap = pendingLiveResizeWordWrap ?? self.wordWrap
+                pendingLiveResizeWordWrap = nil
+                let stillLiveResizing = scrollView?.window?.inLiveResize == true
+                if stillLiveResizing {
+                    beginLiveResizeIfNeeded()
+                }
+                applyLayout(
+                    wordWrap: nextWordWrap,
+                    force: false,
+                    duringLiveResize: stillLiveResizing
+                )
+                if !stillLiveResizing, isLiveResizing {
+                    finishLiveResize()
+                }
+            }
+            liveResizeLayoutWorkItem = workItem
+            DispatchQueue.main.async(execute: workItem)
+        }
+
+        private func beginLiveResizeIfNeeded() {
+            guard !isLiveResizing else { return }
+            isLiveResizing = true
+            os_signpost(
+                .begin,
+                log: editorPerformanceLog,
+                name: "EditorLiveResize"
+            )
+            cancelPendingHighlight()
+            layoutPrefetchWorkItem?.cancel()
+            layoutPrefetchWorkItem = nil
+        }
+
+        private func finishLiveResize() {
+            guard isLiveResizing else { return }
+            isLiveResizing = false
+            liveResizeLayoutWorkItem?.cancel()
+            liveResizeLayoutWorkItem = nil
+            let nextWordWrap = pendingLiveResizeWordWrap ?? wordWrap
+            pendingLiveResizeWordWrap = nil
+            applyLayout(
+                wordWrap: nextWordWrap,
+                force: true,
+                duringLiveResize: false
+            )
+            ruler?.requestRedraw()
+            scheduleHighlight(delay: 0)
+            scheduleDirectionalLayoutPrefetch()
+            os_signpost(
+                .end,
+                log: editorPerformanceLog,
+                name: "EditorLiveResize"
             )
         }
 
@@ -698,7 +790,9 @@ struct EditorTextView: NSViewRepresentable {
                 return
             }
             textView.textContainerInset = NSSize(width: 0, height: topInset)
+            textView.needsLayout = true
             textView.needsDisplay = true
+            invalidateEntireRuler(displayImmediately: true)
             refreshRuler()
         }
 
@@ -706,6 +800,13 @@ struct EditorTextView: NSViewRepresentable {
             guard isActive != newValue else { return }
             isActive = newValue
             guard newValue else {
+                rulerRefreshWorkItem?.cancel()
+                rulerRefreshWorkItem = nil
+                rulerRefreshNeedsLayout = false
+                liveResizeLayoutWorkItem?.cancel()
+                liveResizeLayoutWorkItem = nil
+                pendingLiveResizeWordWrap = nil
+                isLiveResizing = false
                 textCodecSuggestionWorkItem?.cancel()
                 document.textCodecSuggestionTitle = nil
                 cancelDelimiterMatch(clearHighlight: true, releaseSnapshot: true)
@@ -720,6 +821,7 @@ struct EditorTextView: NSViewRepresentable {
             }
             textView?.requestsFirstResponderWhenAttached = true
             updateLayout(wordWrap: wordWrap, force: true)
+            ruler?.requestRedraw()
             scheduleHighlight(delay: 0)
             scheduleDelimiterMatch(delay: 0)
             scheduleTextCodecSuggestion(delay: 0.18)
@@ -727,6 +829,7 @@ struct EditorTextView: NSViewRepresentable {
                 guard let self, isActive, let textView, let window = textView.window else {
                     return
                 }
+                ruler?.requestRedraw()
                 window.makeFirstResponder(textView)
             }
         }
@@ -1120,7 +1223,10 @@ struct EditorTextView: NSViewRepresentable {
                 return
             }
             textView?.needsDisplay = true
-            invalidateEntireRuler(displayImmediately: true)
+            invalidateEntireRuler(
+                displayImmediately: true,
+                invalidateLineMap: false
+            )
             updateCursor()
             scheduleDelimiterMatch()
             scheduleTextCodecSuggestion()
@@ -1133,7 +1239,10 @@ struct EditorTextView: NSViewRepresentable {
                 return
             }
             textView?.needsDisplay = true
-            invalidateEntireRuler(displayImmediately: true)
+            invalidateEntireRuler(
+                displayImmediately: true,
+                invalidateLineMap: false
+            )
             scheduleDelimiterMatch()
             scheduleTextCodecSuggestion()
         }
@@ -1521,7 +1630,10 @@ struct EditorTextView: NSViewRepresentable {
         }
 
         private func refreshRulerForViewportChange() {
-            scheduleRulerRefresh(ensureLayout: false)
+            rulerRefreshWorkItem?.cancel()
+            rulerRefreshWorkItem = nil
+            rulerRefreshNeedsLayout = false
+            ruler?.requestRedraw()
         }
 
         private func scheduleRulerRefresh(ensureLayout: Bool) {
@@ -1540,11 +1652,12 @@ struct EditorTextView: NSViewRepresentable {
             DispatchQueue.main.async(execute: workItem)
         }
 
-        private func invalidateEntireRuler(displayImmediately: Bool = false) {
+        private func invalidateEntireRuler(
+            displayImmediately: Bool = false,
+            invalidateLineMap: Bool = true
+        ) {
             guard let ruler else { return }
-            ruler.invalidateHashMarks()
-            ruler.needsDisplay = true
-            ruler.setNeedsDisplay(ruler.bounds)
+            ruler.requestRedraw(invalidateLineMap: invalidateLineMap)
             if displayImmediately {
                 ruler.displaySelectionImmediately()
             }

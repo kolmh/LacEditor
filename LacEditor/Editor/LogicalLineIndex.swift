@@ -1,5 +1,7 @@
 import Foundation
 
+/// Kept for fold-layout verification and callers that need to suppress
+/// duplicate row rendering when multiple layout fragments share a position.
 struct LineNumberLayoutTracker {
     private var lastDrawnY: CGFloat?
 

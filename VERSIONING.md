@@ -87,10 +87,13 @@ chore(release): v0.2.0
 5. 提交并创建带说明的标签：
 
    ```bash
-   git add .
+   git status --short
+   git add VERSION CHANGELOG.md LacEditor.xcodeproj/project.pbxproj <本版本其他已确认文件>
    git commit -m "chore(release): v0.2.0"
    git tag -a v0.2.0 -m "LacEditor v0.2.0"
    ```
+
+   不使用 `git add .`；逐项确认路径，避免把设计草稿、临时文件或其他未发布工作误纳入版本。
 
 6. 如果配置了远程仓库，再推送分支和标签：
 

@@ -64,6 +64,7 @@ fi
 
 print
 print "发布内容已准备完成。人工确认 CHANGELOG.md 后执行："
-print "  git add ."
+print "  git status --short"
+print "  git add <逐项确认的发布文件路径>"
 print "  git commit -m \"chore(release): v$new_version\""
 print "  git tag -a v$new_version -m \"LacEditor v$new_version\""

@@ -70,31 +70,10 @@ private struct SidebarLibraryView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Text("文件")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button {
-                    windowManager.requestCreateSidebarGroup()
-                } label: {
-                    Image(systemName: "folder.badge.plus")
-                        .font(.system(size: 11))
-                        .frame(width: 24, height: 24)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .stableHelp("新建分组")
-            }
-            .padding(.leading, 13)
-            .padding(.trailing, 9)
-            .frame(height: 36)
-
             ScrollView {
                 LazyVStack(spacing: 10) {
                     sidebarSection(
                         title: "收藏夹",
-                        icon: "star.fill",
                         section: .favorites,
                         count: library.favoriteURLs.count
                     ) {
@@ -115,7 +94,6 @@ private struct SidebarLibraryView: View {
 
                     sidebarSection(
                         title: "分组",
-                        icon: "folder",
                         section: .groups,
                         count: library.groups.count
                     ) {
@@ -147,7 +125,6 @@ private struct SidebarLibraryView: View {
 
                     sidebarSection(
                         title: "最近文件",
-                        icon: "clock",
                         section: .recent,
                         count: recentFiles.urls.count
                     ) {
@@ -169,6 +146,7 @@ private struct SidebarLibraryView: View {
                     }
                 }
                 .padding(.horizontal, 6)
+                .padding(.top, 8)
                 .padding(.bottom, 8)
             }
         }
@@ -177,7 +155,6 @@ private struct SidebarLibraryView: View {
     @ViewBuilder
     private func sidebarSection<Content: View>(
         title: String,
-        icon: String,
         section: SidebarLibrarySection,
         count: Int,
         @ViewBuilder content: @escaping () -> Content
@@ -192,9 +169,6 @@ private struct SidebarLibraryView: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: icon)
-                            .font(.system(size: 10))
-                            .frame(width: 13)
                         Text(title)
                             .font(.system(size: 11, weight: .semibold))
                         if count > 0 {

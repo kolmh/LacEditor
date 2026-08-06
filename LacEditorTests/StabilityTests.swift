@@ -3,6 +3,82 @@ import XCTest
 @testable import LacEditor
 
 final class StabilityTests: XCTestCase {
+    func testLineNumberGeometryTracksScrollAndLineCenter() {
+        let textLine = NSRect(x: 0, y: 240, width: 500, height: 24)
+        let contentLayout = NSRect(x: 0, y: 72, width: 44, height: 600)
+        let rulerBounds = NSRect(x: 0, y: 0, width: 44, height: 672)
+        let initial = LineNumberGeometry.rulerRect(
+            for: textLine,
+            visibleTextRect: NSRect(x: 0, y: 200, width: 800, height: 600),
+            contentLayoutRect: contentLayout,
+            rulerBounds: rulerBounds
+        )
+        let scrolled = LineNumberGeometry.rulerRect(
+            for: textLine,
+            visibleTextRect: NSRect(x: 0, y: 209, width: 800, height: 600),
+            contentLayoutRect: contentLayout,
+            rulerBounds: rulerBounds
+        )
+        XCTAssertEqual(initial.minY, 112, accuracy: 0.001)
+        XCTAssertEqual(scrolled.minY, initial.minY - 9, accuracy: 0.001)
+
+        let origin = LineNumberGeometry.labelOrigin(
+            rulerWidth: 44,
+            labelSize: NSSize(width: 12, height: 14),
+            lineRect: NSRect(x: 0, y: 112, width: 44, height: 24)
+        )
+        XCTAssertEqual(origin.x, 16, accuracy: 0.001)
+        XCTAssertEqual(origin.y, 117, accuracy: 0.001)
+    }
+
+    func testLineNumberSelectionIncludesCompleteLogicalLines() {
+        let first = NSRange(location: 12, length: 8)
+        let second = NSRange(location: 32, length: 14)
+        XCTAssertEqual(
+            LineNumberGeometry.selectionRange(from: first, to: second),
+            NSRange(location: 12, length: 34)
+        )
+        XCTAssertEqual(
+            LineNumberGeometry.selectionRange(from: second, to: first),
+            NSRange(location: 12, length: 34)
+        )
+    }
+
+    func testLineNumberVisibleMapCacheKeyTracksLayoutInputs() {
+        let base = LineNumberVisibleMapCacheKey(
+            visibleTextRect: NSRect(x: 0, y: 120, width: 700, height: 500),
+            contentLayoutRect: NSRect(x: 0, y: 52, width: 44, height: 500),
+            rulerBounds: NSRect(x: 0, y: 0, width: 44, height: 552),
+            textContainerWidth: 656,
+            textLength: 12_000,
+            layoutGeneration: 7,
+            foldedRange: nil
+        )
+        XCTAssertEqual(base, base)
+
+        let resized = LineNumberVisibleMapCacheKey(
+            visibleTextRect: NSRect(x: 0, y: 120, width: 720, height: 500),
+            contentLayoutRect: base.contentLayoutRect,
+            rulerBounds: base.rulerBounds,
+            textContainerWidth: 676,
+            textLength: base.textLength,
+            layoutGeneration: base.layoutGeneration,
+            foldedRange: nil
+        )
+        XCTAssertNotEqual(base, resized)
+
+        let invalidated = LineNumberVisibleMapCacheKey(
+            visibleTextRect: base.visibleTextRect,
+            contentLayoutRect: base.contentLayoutRect,
+            rulerBounds: base.rulerBounds,
+            textContainerWidth: base.textContainerWidth,
+            textLength: base.textLength,
+            layoutGeneration: base.layoutGeneration + 1,
+            foldedRange: nil
+        )
+        XCTAssertNotEqual(base, invalidated)
+    }
+
     @MainActor
     func testSidebarLibraryPersistsGroupsFavoritesAndOrdering() throws {
         let directory = FileManager.default.temporaryDirectory
