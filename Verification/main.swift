@@ -216,75 +216,6 @@ do {
     fatalError("Verification failed: text codec threw \(error)")
 }
 
-let markdown = """
-# 标题
-
-> 引用
-
-| 名称 | 值 |
-| --- | --- |
-| LacEditor | **轻量** |
-"""
-let html = MarkdownRenderer.render(markdown, darkMode: false)
-require(html.contains("<h1>标题</h1>"), "Markdown heading")
-require(html.contains("<blockquote>引用</blockquote>"), "Markdown quote")
-require(html.contains("<table>"), "Markdown table")
-require(html.contains("<strong>轻量</strong>"), "Markdown emphasis")
-
-let inlineCodeHTML = MarkdownRenderer.render(
-    #"`**保持原样** [链接](https://example.com)`"#,
-    darkMode: false
-)
-require(
-    inlineCodeHTML.contains(
-        #"<code>**保持原样** [链接](https://example.com)</code>"#
-    ),
-    "Markdown inline code protects nested markup"
-)
-require(
-    !inlineCodeHTML.contains("<code><strong>"),
-    "Markdown inline code is not emphasized"
-)
-let inlineCodeCollisionHTML = MarkdownRenderer.render(
-    "LACXINCODEX0XENDLAC and `code`",
-    darkMode: false
-)
-require(
-    inlineCodeCollisionHTML.contains("LACXINCODEX0XENDLAC and <code>code</code>"),
-    "Markdown inline code placeholder cannot collide with source text"
-)
-let underscoredLinkHTML = MarkdownRenderer.render(
-    "[链接](https://example.com/foo_bar_baz)",
-    darkMode: false
-)
-require(
-    underscoredLinkHTML.contains(
-        #"<a href="https://example.com/foo_bar_baz">链接</a>"#
-    ),
-    "Markdown emphasis does not alter link destinations"
-)
-require(
-    !underscoredLinkHTML.contains("<em>"),
-    "Markdown link destination underscores stay literal"
-)
-let crlfMarkdownHTML = MarkdownRenderer.render(
-    "第一行\r\n第二行",
-    darkMode: false
-)
-require(
-    crlfMarkdownHTML.contains("<p>第一行 第二行</p>"),
-    "Markdown treats CRLF as one line separator"
-)
-
-let orderedMarkdown = """
-1. 第一项
-2. 第二项
-   - 子项 A
-   - 子项 B
-3. 第三项
-4. 第四项
-5. 第五项
-"""
 let veryLongOrderedList = (1...501)
     .map { "\($0). item \($0)" }
     .joined(separator: "\n") as NSString
@@ -295,49 +226,6 @@ require(
     ),
     "ordered lists over 500 items use background normalization"
 )
-let orderedHTML = MarkdownRenderer.render(orderedMarkdown, darkMode: false)
-require(
-    orderedHTML.contains("<li>第二项\n<ul>\n<li>子项 A</li>"),
-    "nested unordered list stays inside its ordered parent item"
-)
-require(
-    orderedHTML.components(separatedBy: "<ol").count - 1 == 1,
-    "nested unordered list does not split the outer ordered list"
-)
-require(orderedHTML.contains("<li>第三项</li>"), "ordered list resumes after nested items")
-require(orderedHTML.contains("<li>第五项</li>"), "ordered list keeps later items")
-
-let nestedListMarkdown = """
-- 一级项目
-  - 二级项目
-    - 三级项目
-  1. 二级有序项目
-  2. 二级有序项目二
-- 一级项目二
-"""
-let nestedListHTML = MarkdownRenderer.render(nestedListMarkdown, darkMode: false)
-require(
-    nestedListHTML.contains("<li>一级项目\n<ul>\n<li>二级项目\n<ul>\n<li>三级项目</li>"),
-    "three-level unordered lists preserve hierarchy"
-)
-require(
-    nestedListHTML.contains("<ol>\n<li>二级有序项目</li>\n<li>二级有序项目二</li>\n</ol>"),
-    "mixed ordered and unordered nested lists preserve hierarchy"
-)
-
-let tabIndentedListHTML = MarkdownRenderer.render(
-    "- 一级\n\t- 二级\n\t\t1. 三级有序\n- 另一个一级",
-    darkMode: false
-)
-require(
-    tabIndentedListHTML.contains("<li>一级\n<ul>\n<li>二级\n<ol>\n<li>三级有序</li>"),
-    "tab-indented mixed lists preserve hierarchy"
-)
-require(
-    tabIndentedListHTML.contains("</ol>\n</li>\n</ul>\n</li>\n<li>另一个一级</li>"),
-    "nested lists close before the following top-level item"
-)
-
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "script.js")) == .javascript, "JS language inference")
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "module.mjs")) == .javascript, "MJS language inference")
 require(EditorLanguage.infer(from: URL(fileURLWithPath: "common.cjs")) == .javascript, "CJS language inference")

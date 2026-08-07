@@ -1,5 +1,26 @@
 import AppKit
 
+enum EditorLayoutPolicy {
+    static let viewportLayoutThreshold = 500_000
+
+    static func usesViewportLayout(textLength: Int) -> Bool {
+        textLength > viewportLayoutThreshold
+    }
+
+    static func configure(
+        _ layoutManager: NSLayoutManager,
+        textLength: Int
+    ) {
+        // TextKit 1 otherwise lays out continuously from the beginning of the
+        // document. That makes deep scrolling and width changes progressively
+        // more expensive even for files below the large-file threshold.
+        layoutManager.allowsNonContiguousLayout = true
+        layoutManager.backgroundLayoutEnabled = !usesViewportLayout(
+            textLength: textLength
+        )
+    }
+}
+
 final class FoldLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     private(set) var foldedRange: NSRange?
 

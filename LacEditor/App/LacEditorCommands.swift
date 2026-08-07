@@ -175,7 +175,7 @@ struct LacEditorCommands: Commands {
                     systemImage: "sidebar.left"
                 )
             }
-            .keyboardShortcut("s", modifiers: [.command, .control])
+            .keyboardShortcut("b", modifiers: [.command, .control])
             .disabled(appState == nil)
 
             Button {

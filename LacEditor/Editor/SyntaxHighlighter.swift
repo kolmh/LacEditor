@@ -35,6 +35,10 @@ enum SyntaxHighlighter {
         func invalidate(after location: Int) {
             codeLexicalContext.invalidate(after: location)
         }
+
+        var preparedThrough: Int {
+            codeLexicalContext.preparedThrough
+        }
     }
 
     private struct RuleDefinition {

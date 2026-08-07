@@ -11,6 +11,7 @@ final class WindowManager: ObservableObject {
     let recentFiles = RecentFilesStore()
     let sidebarLibrary = SidebarLibraryStore()
     let preferences = AppPreferences()
+    let recoveryStore: DocumentRecoveryStore?
     @Published private(set) var activeState: AppState?
     @Published private(set) var draggedDocumentID: UUID?
     private(set) var terminationApproved = false
@@ -37,11 +38,16 @@ final class WindowManager: ObservableObject {
     private var recentFilesCancellable: AnyCancellable?
     private var sidebarLibraryCancellable: AnyCancellable?
     private let fileService = FileService()
+    private var recoveredDocuments: [EditorDocument] = []
     private lazy var appearanceMenuController = AppearanceMenuController(
         windowManager: self
     )
 
-    init() {
+    init(recoveryStore: DocumentRecoveryStore? = nil) {
+        self.recoveryStore = recoveryStore
+        if let snapshots = try? recoveryStore?.startSession() {
+            recoveredDocuments = snapshots.map(Self.makeRecoveredDocument)
+        }
         recentFilesCancellable = recentFiles.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
@@ -49,6 +55,15 @@ final class WindowManager: ObservableObject {
             self?.objectWillChange.send()
         }
         _ = appearanceMenuController
+    }
+
+    func takeRecoveredDocuments() -> [EditorDocument] {
+        defer { recoveredDocuments.removeAll() }
+        return recoveredDocuments
+    }
+
+    func persistRecoverySnapshotsImmediately() {
+        states.values.forEach { $0.persistRecoverySnapshotsImmediately() }
     }
 
     func register(windowID: UUID, state: AppState, window: NSWindow) {
@@ -86,7 +101,8 @@ final class WindowManager: ObservableObject {
         let state = AppState(
             initialDocument: document,
             recentFiles: recentFiles,
-            preferences: preferences
+            preferences: preferences,
+            recoveryStore: recoveryStore
         )
         state.windowManager = self
         states[windowID] = state
@@ -468,7 +484,13 @@ final class WindowManager: ObservableObject {
     ) {
         guard let state = queue.first else {
             terminationApproved = true
-            completion(true)
+            guard let recoveryStore else {
+                completion(true)
+                return
+            }
+            recoveryStore.finishCleanly {
+                completion(true)
+            }
             return
         }
         state.confirmClosingAllDocuments { [weak self] approved in
@@ -578,5 +600,27 @@ final class WindowManager: ObservableObject {
             x: min(max(desired.x, visible.minX), visible.maxX - size.width),
             y: min(max(desired.y, visible.minY), visible.maxY - size.height)
         ))
+    }
+
+    private static func makeRecoveredDocument(
+        from snapshot: DocumentRecoverySnapshot
+    ) -> EditorDocument {
+        let document = EditorDocument(
+            id: snapshot.documentID,
+            text: snapshot.text,
+            url: snapshot.sourceURL,
+            language: snapshot.language,
+            fileEncoding: snapshot.encoding,
+            fileRevisionSnapshot: snapshot.fileRevisionSnapshot,
+            isDirty: true,
+            requiresExplicitSave: true
+        )
+        document.selectionRange = snapshot.selectionRange
+        document.scrollPositionRatio = snapshot.scrollPositionRatio
+        document.isPreviewVisible = snapshot.language == .markdown
+            && snapshot.isPreviewVisible
+            && document.performanceProfile == .standard
+        document.statusMessage = "已从上次异常退出中恢复，请确认后保存"
+        return document
     }
 }

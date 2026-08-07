@@ -96,7 +96,7 @@ struct LacEditorToolbar: ToolbarContent {
         .accessibilityLabel(appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏")
         .stableHelp(
             appState.isSidebarVisible ? "隐藏侧边栏" : "显示侧边栏",
-            shortcut: "⌃⌘S"
+            shortcut: "⌃⌘B"
         )
         .onHover(perform: appState.sidebarToggleHoverChanged)
     }

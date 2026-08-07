@@ -219,27 +219,38 @@ final class AppState: ObservableObject {
         return queue
     }()
     private var documentCancellables: [UUID: AnyCancellable] = [:]
+    private var recoveryCancellables: [UUID: AnyCancellable] = [:]
+    private var recoveryWorkItems: [UUID: DispatchWorkItem] = [:]
+    private var documentsBeingSnapshotted: Set<UUID> = []
     private var openingFileURLs: Set<URL> = []
     private var openingOperations: [URL: Operation] = [:]
     private var cancelledOpeningURLs: Set<URL> = []
     private var sidebarPreviewDismissWorkItem: DispatchWorkItem?
     private var contentChangeObserver: NSObjectProtocol?
     private var preferencesCancellable: AnyCancellable?
+    private let recoveryStore: DocumentRecoveryStore?
 
     init(
         initialDocument: EditorDocument? = nil,
+        initialDocuments: [EditorDocument] = [],
         recentFiles: RecentFilesStore,
-        preferences: AppPreferences
+        preferences: AppPreferences,
+        recoveryStore: DocumentRecoveryStore? = nil
     ) {
         self.recentFiles = recentFiles
         self.preferences = preferences
+        self.recoveryStore = recoveryStore
         isSidebarVisible = UserDefaults.standard.object(
             forKey: "isSidebarVisible"
         ) as? Bool ?? true
         preferencesCancellable = preferences.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
-        if let initialDocument {
+        if !initialDocuments.isEmpty {
+            documents = initialDocuments
+            selectedDocumentID = initialDocuments.first?.id
+            initialDocuments.forEach(observe)
+        } else if let initialDocument {
             documents = [initialDocument]
             selectedDocumentID = initialDocument.id
             observe(initialDocument)
@@ -269,6 +280,7 @@ final class AppState: ObservableObject {
                     self.findReplace.message = "内容已变化，任务已取消"
                 }
                 self.textTransformation.invalidate(documentID: documentID)
+                self.scheduleRecoverySnapshot(for: document)
             }
         }
     }
@@ -278,6 +290,7 @@ final class AppState: ObservableObject {
             NotificationCenter.default.removeObserver(contentChangeObserver)
         }
         documentTaskQueue.cancelAllOperations()
+        recoveryWorkItems.values.forEach { $0.cancel() }
     }
 
     var selectedDocument: EditorDocument? {
@@ -1200,6 +1213,23 @@ final class AppState: ObservableObject {
             document.$ioState.dropFirst().map { _ in () }.eraseToAnyPublisher()
         ])
         .sink { [weak self] in self?.objectWillChange.send() }
+
+        recoveryCancellables[document.id] = Publishers.MergeMany([
+            document.$text.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            document.$url.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            document.$language.dropFirst().map { _ in () }.eraseToAnyPublisher(),
+            document.$isDirty.dropFirst().map { _ in () }.eraseToAnyPublisher()
+        ])
+        .sink { [weak self, weak document] in
+            guard let self, let document,
+                  !self.documentsBeingSnapshotted.contains(document.id) else {
+                return
+            }
+            self.scheduleRecoverySnapshot(for: document)
+        }
+        if document.isDirty {
+            scheduleRecoverySnapshot(for: document, delay: 0)
+        }
     }
 
     private func stopObserving(_ document: EditorDocument) {
@@ -1211,6 +1241,68 @@ final class AppState: ObservableObject {
         document.taskCoordinator.cancel(.textTransformation)
         textTransformation.invalidate(documentID: document.id)
         documentCancellables.removeValue(forKey: document.id)?.cancel()
+        recoveryCancellables.removeValue(forKey: document.id)?.cancel()
+        recoveryWorkItems.removeValue(forKey: document.id)?.cancel()
+    }
+
+    private func scheduleRecoverySnapshot(
+        for document: EditorDocument,
+        delay: TimeInterval? = nil
+    ) {
+        guard let recoveryStore else { return }
+        recoveryWorkItems.removeValue(forKey: document.id)?.cancel()
+        guard document.isDirty else {
+            recoveryStore.discard(documentID: document.id)
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self, weak document] in
+            guard let self, let document,
+                  self.documents.contains(where: { $0.id == document.id }),
+                  document.isDirty else {
+                return
+            }
+            self.documentsBeingSnapshotted.insert(document.id)
+            let text = document.synchronizedText()
+            self.documentsBeingSnapshotted.remove(document.id)
+            guard document.isDirty else {
+                recoveryStore.discard(documentID: document.id)
+                return
+            }
+            recoveryStore.persist(DocumentRecoverySnapshot(
+                documentID: document.id,
+                text: text,
+                sourceURL: document.url,
+                language: document.language,
+                encoding: document.fileEncoding,
+                revision: document.textRevision,
+                selectionRange: document.selectionRange,
+                scrollPositionRatio: document.scrollPositionRatio,
+                isPreviewVisible: document.isPreviewVisible,
+                fileRevisionSnapshot: document.fileRevisionSnapshot,
+                capturedAt: Date()
+            ))
+            self.recoveryWorkItems.removeValue(forKey: document.id)
+        }
+        recoveryWorkItems[document.id] = workItem
+        let resolvedDelay = delay ?? (document.isLargeFileMode ? 5 : 2)
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + resolvedDelay,
+            execute: workItem
+        )
+    }
+
+    func prepareForApprovedWindowClose() {
+        let documentIDs = documents.map(\.id)
+        recoveryWorkItems.values.forEach { $0.cancel() }
+        recoveryWorkItems.removeAll()
+        recoveryStore?.discard(documentIDs: documentIDs)
+    }
+
+    func persistRecoverySnapshotsImmediately() {
+        for document in documents where document.isDirty {
+            scheduleRecoverySnapshot(for: document, delay: 0)
+        }
     }
 
     private func suggestedFilename(for document: EditorDocument) -> String {
@@ -1482,6 +1574,7 @@ final class AppState: ObservableObject {
                         ? "已保存先前版本，仍有未保存更改"
                         : nil
                     self.recentFiles.record(url)
+                    self.scheduleRecoverySnapshot(for: document, delay: 0)
                     completion?(!document.isDirty)
                 } else {
                     let description = saveResult.errorDescription ?? "无法取得保存后的文件状态"
@@ -1576,6 +1669,7 @@ final class AppState: ObservableObject {
                         document.updateFileRevisionSnapshot(try? FileRevisionSnapshot.capture(url))
                         document.markSaved()
                         document.ioState = .idle
+                        self.scheduleRecoverySnapshot(for: document, delay: 0)
                     case let .needsEncoding(data, byteCount):
                         guard let choice = self.fileService.chooseEncoding(for: url) else {
                             document.ioState = .idle
@@ -1629,6 +1723,7 @@ final class AppState: ObservableObject {
                     document.updateFileRevisionSnapshot(try? FileRevisionSnapshot.capture(url))
                     document.markSaved()
                     document.ioState = .idle
+                    self.scheduleRecoverySnapshot(for: document, delay: 0)
                 } catch {
                     document.ioState = .failed(error.localizedDescription)
                     self.presentError(title: "无法重新载入文件", error: error)
@@ -1773,6 +1868,7 @@ final class AppState: ObservableObject {
     private func removeDocument(_ document: EditorDocument) {
         guard let index = documents.firstIndex(where: { $0.id == document.id }) else { return }
         stopObserving(document)
+        recoveryStore?.discard(documentID: document.id)
         documents.remove(at: index)
         if documents.isEmpty {
             newDocument()

@@ -10,10 +10,13 @@ struct LacEditorApp: App {
     private let primaryWindowID: UUID
 
     init() {
-        let manager = WindowManager()
+        let manager = WindowManager(recoveryStore: DocumentRecoveryStore())
+        let recoveredDocuments = manager.takeRecoveredDocuments()
         let state = AppState(
+            initialDocuments: recoveredDocuments,
             recentFiles: manager.recentFiles,
-            preferences: manager.preferences
+            preferences: manager.preferences,
+            recoveryStore: manager.recoveryStore
         )
         state.windowManager = manager
         let windowID = UUID()
@@ -147,6 +150,10 @@ private struct WindowThemeCoordinator: NSViewRepresentable {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var sharedManager: WindowManager?
+
+    func applicationDidResignActive(_ notification: Notification) {
+        Self.sharedManager?.persistRecoverySnapshotsImmediately()
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let manager = Self.sharedManager else { return .terminateNow }
@@ -338,6 +345,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
                     isWaitingForSave = false
                     appState.confirmClosingAllDocuments { [weak self, weak sender] approved in
                         guard let self, let sender, approved else { return }
+                        appState.prepareForApprovedWindowClose()
                         isCloseApproved = true
                         sender.performClose(nil)
                     }
@@ -350,6 +358,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
                 guard let self, let sender else { return }
                 isWaitingForSave = false
                 if approved {
+                    appState.prepareForApprovedWindowClose()
                     isCloseApproved = true
                     sender.performClose(nil)
                 }
@@ -376,5 +385,4 @@ func configureEditorWindowChrome(_ window: NSWindow) {
     window.titleVisibility = .hidden
     window.titlebarAppearsTransparent = true
     window.backgroundColor = .lacEditorBackground
-    window.toolbar?.showsBaselineSeparator = false
 }

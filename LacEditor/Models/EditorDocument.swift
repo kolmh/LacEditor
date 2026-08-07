@@ -140,7 +140,7 @@ final class DocumentTaskCoordinator: @unchecked Sendable {
 }
 
 final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable {
-    let id = UUID()
+    let id: UUID
     @Published var text: String {
         didSet {
             hasPendingLiveEdits = false
@@ -169,7 +169,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private(set) var fileIdentity: DocumentFileIdentity?
     private(set) var fileRevisionSnapshot: FileRevisionSnapshot?
     let taskCoordinator = DocumentTaskCoordinator()
-    private var savedText: String
+    private var savedText: String?
     private var liveTextProviderID: UUID?
     private var liveTextProvider: (() -> String?)?
     private var liveTextAcknowledgement: ((UInt) -> Void)?
@@ -187,6 +187,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     private var metricsDebounceWorkItem: DispatchWorkItem?
 
     init(
+        id: UUID = UUID(),
         text: String = "",
         url: URL? = nil,
         language: EditorLanguage = .plainText,
@@ -195,8 +196,10 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         isDirty: Bool = false,
         byteCount: Int? = nil,
         lineCount: Int? = nil,
-        performanceProfile: DocumentPerformanceProfile? = nil
+        performanceProfile: DocumentPerformanceProfile? = nil,
+        requiresExplicitSave: Bool = false
     ) {
+        self.id = id
         self.text = text
         self.url = url
         self.language = language
@@ -210,7 +213,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         )
         self.performanceProfile = resolvedProfile
         self.isPreviewVisible = language == .markdown && resolvedProfile == .standard
-        self.savedText = text
+        self.savedText = requiresExplicitSave ? nil : text
         self.wordCount = text.utf16.count < 100_000
             ? Self.countWords(in: text)
             : 0
@@ -328,8 +331,8 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func refreshDirtyState() {
         synchronizeLiveText()
         let currentText = text
-        let savedSnapshot = savedText
-        updateDirtyState(currentText != savedSnapshot)
+        let shouldBeDirty = savedText.map { currentText != $0 } ?? true
+        updateDirtyState(shouldBeDirty)
     }
 
     func markSaved() {
@@ -365,7 +368,8 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
         liveTextAcknowledgement = nil
         hasPendingLiveEdits = false
         pendingLiveTextIsEmpty = nil
-        updateDirtyState(text != savedText)
+        let shouldBeDirty = savedText.map { text != $0 } ?? true
+        updateDirtyState(shouldBeDirty)
     }
 
     func noteLiveEdit(isEmpty: Bool) {

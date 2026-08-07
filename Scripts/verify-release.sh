@@ -37,6 +37,9 @@ print "验证 LacEditor $version ($build_numbers)"
 plutil -lint LacEditor.xcodeproj/project.pbxproj
 swift build
 swift build -c release
+if [[ "${LACEDITOR_SKIP_TESTS:-0}" != "1" ]]; then
+    swift test
+fi
 
 swiftc \
     LacEditor/Models/EditorLanguage.swift \
@@ -51,7 +54,6 @@ swiftc \
     LacEditor/Editor/CodeLexicalScanner.swift \
     LacEditor/Editor/DelimiterMatchingService.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
-    LacEditor/Preview/MarkdownRenderer.swift \
     Verification/main.swift \
     -o .build/core-verification
 .build/core-verification

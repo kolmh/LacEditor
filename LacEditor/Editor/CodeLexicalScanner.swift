@@ -37,13 +37,14 @@ enum CodeLexicalScanner {
     fileprivate struct Checkpoint {
         let location: Int
         let state: State
+        let lineStart: Int
     }
 
     final class IncrementalContext {
         private let lock = NSLock()
         private var language: EditorLanguage?
         private var revision: UInt?
-        private var checkpoints = [Checkpoint(location: 0, state: .normal)]
+        private var checkpoints = [Checkpoint(location: 0, state: .normal, lineStart: 0)]
         private var generation: UInt = 0
         private var acceptsRevisionChange = false
 
@@ -58,10 +59,16 @@ enum CodeLexicalScanner {
             generation &+= 1
             checkpoints.removeAll { $0.location > max(0, location) }
             if checkpoints.isEmpty {
-                checkpoints = [Checkpoint(location: 0, state: .normal)]
+                checkpoints = [Checkpoint(location: 0, state: .normal, lineStart: 0)]
             }
             acceptsRevisionChange = true
             lock.unlock()
+        }
+
+        var preparedThrough: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return checkpoints.last?.location ?? 0
         }
 
         fileprivate func preparation(
@@ -87,7 +94,7 @@ enum CodeLexicalScanner {
             }
             let checkpoint = checkpoints.last(where: {
                 $0.location <= targetLocation
-            }) ?? Checkpoint(location: 0, state: .normal)
+            }) ?? Checkpoint(location: 0, state: .normal, lineStart: 0)
             return (checkpoint, generation)
         }
 
@@ -116,7 +123,7 @@ enum CodeLexicalScanner {
             generation &+= 1
             language = nil
             revision = nil
-            checkpoints = [Checkpoint(location: 0, state: .normal)]
+            checkpoints = [Checkpoint(location: 0, state: .normal, lineStart: 0)]
             acceptsRevisionChange = false
         }
     }
@@ -180,16 +187,17 @@ enum CodeLexicalScanner {
             emissionRange: range,
             configuration: configuration,
             initialState: preparation.checkpoint.state,
+            initialLineStart: preparation.checkpoint.lineStart,
             stopAfter: min(string.length, NSMaxRange(range) + checkpointStride),
             isCancelled: isCancelled
         )
-        guard !scan.wasCancelled else { return [] }
         context.commit(
             scan.checkpoints,
             language: language,
             revision: revision,
             generation: preparation.generation
         )
+        guard !scan.wasCancelled else { return [] }
         return scan.tokens
     }
 
@@ -331,12 +339,13 @@ enum CodeLexicalScanner {
         emissionRange: NSRange,
         configuration: Configuration,
         initialState: State,
+        initialLineStart: Int? = nil,
         stopAfter: Int? = nil,
         isCancelled: () -> Bool
     ) -> ScanResult {
         let end = min(string.length, stopAfter ?? NSMaxRange(scanRange))
         var location = max(0, scanRange.location)
-        var lineStart = location
+        var lineStart = min(location, max(0, initialLineStart ?? location))
         var state = initialState
         var tokenStart: Int? = state == .normal ? nil : location
         var result: [Token] = []
@@ -356,7 +365,11 @@ enum CodeLexicalScanner {
 
         func checkpointIfNeeded() {
             guard location - lastCheckpointLocation >= checkpointStride else { return }
-            checkpoints.append(Checkpoint(location: location, state: state))
+            checkpoints.append(Checkpoint(
+                location: location,
+                state: state,
+                lineStart: lineStart
+            ))
             lastCheckpointLocation = location
         }
 
@@ -374,7 +387,18 @@ enum CodeLexicalScanner {
 
         while location < end {
             if scannedCharacters.isMultiple(of: 4_096), isCancelled() {
-                return ScanResult(tokens: [], checkpoints: [], wasCancelled: true)
+                if checkpoints.last?.location != location {
+                    checkpoints.append(Checkpoint(
+                        location: location,
+                        state: state,
+                        lineStart: lineStart
+                    ))
+                }
+                return ScanResult(
+                    tokens: [],
+                    checkpoints: checkpoints,
+                    wasCancelled: true
+                )
             }
             scannedCharacters += 1
 

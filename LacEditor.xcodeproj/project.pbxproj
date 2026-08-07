@@ -47,6 +47,14 @@
 		A00000000000000000000129 /* DelimiterMatchingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000029 /* DelimiterMatchingService.swift */; };
 		A0000000000000000000012A /* TextCodecService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002A /* TextCodecService.swift */; };
 		A0000000000000000000012B /* TextTransformationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* TextTransformationView.swift */; };
+		A0000000000000000000012E /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = A0000000000000000000081E /* cmark-gfm */; };
+		A0000000000000000000012F /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = A0000000000000000000081F /* cmark-gfm-extensions */; };
+		A00000000000000000000130 /* EditorSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000030 /* EditorSessionStore.swift */; };
+		A00000000000000000000131 /* TabDragBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* TabDragBridge.swift */; };
+		A00000000000000000000132 /* TabScrollBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000032 /* TabScrollBridge.swift */; };
+		A00000000000000000000133 /* SidebarLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* SidebarLibraryView.swift */; };
+		A00000000000000000000134 /* EditorCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000034 /* EditorCoordinator.swift */; };
+		A00000000000000000000135 /* DocumentRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000035 /* DocumentRecoveryStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -91,6 +99,12 @@
 		A00000000000000000000029 /* DelimiterMatchingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DelimiterMatchingService.swift; sourceTree = "<group>"; };
 		A0000000000000000000002A /* TextCodecService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextCodecService.swift; sourceTree = "<group>"; };
 		A0000000000000000000002B /* TextTransformationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextTransformationView.swift; sourceTree = "<group>"; };
+		A00000000000000000000030 /* EditorSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSessionStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000031 /* TabDragBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabDragBridge.swift; sourceTree = "<group>"; };
+		A00000000000000000000032 /* TabScrollBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabScrollBridge.swift; sourceTree = "<group>"; };
+		A00000000000000000000033 /* SidebarLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarLibraryView.swift; sourceTree = "<group>"; };
+		A00000000000000000000034 /* EditorCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCoordinator.swift; sourceTree = "<group>"; };
+		A00000000000000000000035 /* DocumentRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentRecoveryStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -102,6 +116,8 @@
 				A00000000000000000000122 /* SwiftUI.framework in Frameworks */,
 				A00000000000000000000123 /* WebKit.framework in Frameworks */,
 				A00000000000000000000124 /* UniformTypeIdentifiers.framework in Frameworks */,
+				A0000000000000000000012E /* cmark-gfm in Frameworks */,
+				A0000000000000000000012F /* cmark-gfm-extensions in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -133,10 +149,10 @@
 		};
 		A00000000000000000000302 /* App */ = {isa = PBXGroup; children = (A00000000000000000000001, A00000000000000000000002, A0000000000000000000002C, A00000000000000000000003, A0000000000000000000001B); path = App; sourceTree = "<group>"; };
 		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005); path = Models; sourceTree = "<group>"; };
-		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000008, A0000000000000000000002D, A00000000000000000000009, A00000000000000000000017, A0000000000000000000002A); path = Services; sourceTree = "<group>"; };
-		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A00000000000000000000028, A00000000000000000000029, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
+		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000035, A00000000000000000000008, A0000000000000000000002D, A00000000000000000000009, A00000000000000000000017, A0000000000000000000002A); path = Services; sourceTree = "<group>"; };
+		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A00000000000000000000028, A00000000000000000000029, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000034, A00000000000000000000030, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
 		A00000000000000000000306 /* Preview */ = {isa = PBXGroup; children = (A0000000000000000000000F, A00000000000000000000010); path = Preview; sourceTree = "<group>"; };
-		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000027, A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000014, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000002B, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
+		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000027, A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000031, A00000000000000000000032, A00000000000000000000014, A00000000000000000000033, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000002B, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
 		A00000000000000000000309 /* Frameworks */ = {isa = PBXGroup; children = (A00000000000000000000021, A00000000000000000000022, A00000000000000000000023, A00000000000000000000024); name = Frameworks; sourceTree = "<group>"; };
 		A0000000000000000000030A /* Products */ = {isa = PBXGroup; children = (A00000000000000000000020); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
@@ -153,6 +169,10 @@
 			buildRules = ();
 			dependencies = ();
 			name = LacEditor;
+			packageProductDependencies = (
+				A0000000000000000000081E /* cmark-gfm */,
+				A0000000000000000000081F /* cmark-gfm-extensions */,
+			);
 			productName = LacEditor;
 			productReference = A00000000000000000000020 /* LacEditor.app */;
 			productType = "com.apple.product-type.application";
@@ -176,6 +196,9 @@
 			hasScannedForEncodings = 0;
 			knownRegions = (Base, "zh-Hans", en);
 			mainGroup = A00000000000000000000300;
+			packageReferences = (
+				A0000000000000000000080E /* XCRemoteSwiftPackageReference "swift-cmark" */,
+			);
 			productRefGroup = A0000000000000000000030A /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
@@ -217,14 +240,44 @@
 				A00000000000000000000129,
 				A0000000000000000000012A,
 				A0000000000000000000012B,
+				A00000000000000000000130,
+				A00000000000000000000131,
+				A00000000000000000000132,
+				A00000000000000000000133,
+					A00000000000000000000134,
+					A00000000000000000000135,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A0000000000000000000080E /* XCRemoteSwiftPackageReference "swift-cmark" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/swiftlang/swift-cmark.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.8.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A0000000000000000000081E /* cmark-gfm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A0000000000000000000080E /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm";
+		};
+		A0000000000000000000081F /* cmark-gfm-extensions */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A0000000000000000000080E /* XCRemoteSwiftPackageReference "swift-cmark" */;
+			productName = "cmark-gfm-extensions";
+		};
+/* End XCSwiftPackageProductDependency section */
+
 /* Begin XCBuildConfiguration section */
-		A00000000000000000000600 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
-		A00000000000000000000601 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; }; name = Release; };
+		A00000000000000000000600 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ARCHS = arm64; CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 26.0; SDKROOT = macosx; SWIFT_VERSION = 5.0; }; name = Debug; };
+		A00000000000000000000601 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ARCHS = arm64; CLANG_ENABLE_MODULES = YES; MACOSX_DEPLOYMENT_TARGET = 26.0; SDKROOT = macosx; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; SWIFT_VERSION = 5.0; }; name = Release; };
 		A00000000000000000000610 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -232,7 +285,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -240,8 +293,9 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.8.0;
+				ARCHS = arm64;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -257,7 +311,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 9;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -265,8 +319,9 @@
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.productivity";
 				INFOPLIST_KEY_NSHighResolutionCapable = YES;
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 0.8.0;
+				ARCHS = arm64;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.9.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;

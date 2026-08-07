@@ -5,11 +5,21 @@ import PackageDescription
 let package = Package(
     name: "LacEditor",
     platforms: [
-        .macOS(.v14)
+        .macOS("26.0")
+    ],
+    dependencies: [
+        .package(
+            url: "https://github.com/swiftlang/swift-cmark.git",
+            exact: "0.8.0"
+        )
     ],
     targets: [
         .executableTarget(
             name: "LacEditor",
+            dependencies: [
+                .product(name: "cmark-gfm", package: "swift-cmark"),
+                .product(name: "cmark-gfm-extensions", package: "swift-cmark")
+            ],
             path: "LacEditor",
             exclude: ["Assets.xcassets"],
             linkerSettings: [

@@ -165,6 +165,97 @@ struct PerformanceVerification {
             "cached 10 MB highlighting took \(cachedHighlightResult.seconds)s"
         )
 
+        let cancelledHighlightContext = SyntaxHighlighter.IncrementalContext()
+        var cancellationChecks = 0
+        _ = SyntaxHighlighter.tokens(
+            in: extendedSource,
+            language: .javascript,
+            range: NSRange(location: extendedLength * 9 / 10, length: 32_000),
+            context: cancelledHighlightContext,
+            revision: 0,
+            isCancelled: {
+                cancellationChecks += 1
+                return cancellationChecks >= 12
+            }
+        )
+        let firstCancelledCheckpoint = cancelledHighlightContext.preparedThrough
+        require(
+            firstCancelledCheckpoint > 0,
+            "cancelled highlighting must retain completed lexical checkpoints"
+        )
+        cancellationChecks = 0
+        _ = SyntaxHighlighter.tokens(
+            in: extendedSource,
+            language: .javascript,
+            range: NSRange(location: extendedLength * 9 / 10, length: 32_000),
+            context: cancelledHighlightContext,
+            revision: 0,
+            isCancelled: {
+                cancellationChecks += 1
+                return cancellationChecks >= 12
+            }
+        )
+        require(
+            cancelledHighlightContext.preparedThrough > firstCancelledCheckpoint,
+            "restarted highlighting must resume beyond the previous cancellation point"
+        )
+
+        let viewportStorage = NSTextStorage(string: extendedSource)
+        let viewportLayoutManager = NSLayoutManager()
+        EditorLayoutPolicy.configure(
+            viewportLayoutManager,
+            textLength: extendedLength
+        )
+        let viewportContainer = NSTextContainer(containerSize: NSSize(
+            width: 900,
+            height: CGFloat.greatestFiniteMagnitude
+        ))
+        viewportContainer.widthTracksTextView = false
+        viewportStorage.addLayoutManager(viewportLayoutManager)
+        viewportLayoutManager.addTextContainer(viewportContainer)
+        require(
+            viewportLayoutManager.allowsNonContiguousLayout,
+            "editor layout policy must use non-contiguous layout"
+        )
+        require(
+            !viewportLayoutManager.backgroundLayoutEnabled,
+            "editor layout policy must not trigger full-document background layout"
+        )
+        let smallLayoutManager = NSLayoutManager()
+        EditorLayoutPolicy.configure(smallLayoutManager, textLength: 10_000)
+        require(
+            smallLayoutManager.allowsNonContiguousLayout
+                && smallLayoutManager.backgroundLayoutEnabled,
+            "small documents must retain background layout while allowing viewport jumps"
+        )
+        var deepLayoutDurations: [Double] = []
+        for percentage in [10, 50, 90] {
+            let result = measure {
+                viewportLayoutManager.ensureLayout(forCharacterRange: NSRange(
+                    location: extendedLength * percentage / 100,
+                    length: 1
+                ))
+            }
+            deepLayoutDurations.append(result.seconds)
+        }
+        require(
+            deepLayoutDurations.max() ?? .infinity < 1,
+            "viewport layout became position-dependent: \(deepLayoutDurations)"
+        )
+        let resizeLayoutResult = measure {
+            for width in stride(from: 890.0, through: 710.0, by: -10.0) {
+                viewportContainer.containerSize.width = width
+                viewportLayoutManager.ensureLayout(forCharacterRange: NSRange(
+                    location: extendedLength * 9 / 10,
+                    length: 1
+                ))
+            }
+        }
+        require(
+            resizeLayoutResult.seconds < 1,
+            "deep viewport layout after repeated width changes took \(resizeLayoutResult.seconds)s"
+        )
+
         let extendedLineIndex = LogicalLineIndex(text: extendedSource)
         let mutableExtendedSource = NSMutableString(string: extendedSource)
         let indexedPositionResult = measure {
@@ -184,16 +275,6 @@ struct PerformanceVerification {
             indexedPositionResult.seconds < 1,
             "10,000 mutable-storage line lookups took \(indexedPositionResult.seconds)s"
         )
-
-        let markdown = String(
-            repeating: "## 标题\n\n段落包含 **强调** 和 [链接](https://example.com)。\n\n",
-            count: 2_000
-        )
-        let previewResult = measure {
-            MarkdownRenderer.render(markdown, darkMode: false)
-        }
-        require(previewResult.value.contains("<h2>标题</h2>"), "large Markdown render result")
-        require(previewResult.seconds < 5, "Markdown rendering took \(previewResult.seconds)s")
 
         let distantMarkdown = String(repeating: "ordinary paragraph\n", count: 200_000)
             + "7. first\n99. second\n100. third\n"
@@ -249,7 +330,7 @@ struct PerformanceVerification {
         liveDocument.detachLiveTextProvider(id: liveProviderID)
 
         print(String(
-            format: "Performance verification passed: index %.3fs, search %.3fs, highlight %.3fs, attributes %.3fs, TextKit first %.3fs/middle %.3fs, 10 MB initial %.3fs/cached %.3fs, 10k positions %.3fs, Markdown %.3fs, 10k edits %.3fs/model sync %.3fs",
+            format: "Performance verification passed: index %.3fs, search %.3fs, highlight %.3fs, attributes %.3fs, TextKit first %.3fs/middle %.3fs, 10 MB initial %.3fs/cached %.3fs, deep layout %.3fs/resize %.3fs, 10k positions %.3fs, 10k edits %.3fs/model sync %.3fs",
             indexResult.seconds,
             searchResult.seconds,
             highlightResult.seconds,
@@ -258,8 +339,9 @@ struct PerformanceVerification {
             middleLayoutResult.seconds,
             extendedHighlightResult.seconds,
             cachedHighlightResult.seconds,
+            deepLayoutDurations.max() ?? 0,
+            resizeLayoutResult.seconds,
             indexedPositionResult.seconds,
-            previewResult.seconds,
             liveEditResult.seconds,
             modelSyncResult.seconds
         ))

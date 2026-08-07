@@ -15,7 +15,7 @@ print "[1/7] XCTest 稳定性回归"
 swift test
 
 print "[2/7] 发布门禁与静态分析"
-"$SCRIPT_DIR/verify-release.sh"
+LACEDITOR_SKIP_TESTS=1 "$SCRIPT_DIR/verify-release.sh"
 xcodebuild \
     -quiet \
     -project LacEditor.xcodeproj \
@@ -42,10 +42,10 @@ swiftc -O -parse-as-library \
     LacEditor/Services/TextSearchService.swift \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
+    LacEditor/Editor/FoldLayoutManager.swift \
     LacEditor/Editor/CodeLexicalScanner.swift \
     LacEditor/Editor/DelimiterMatchingService.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
-    LacEditor/Preview/MarkdownRenderer.swift \
     Verification/PerformanceVerification.swift \
     -o .build/performance-verification
 .build/performance-verification
@@ -68,17 +68,22 @@ swiftc -O -parse-as-library \
 .build/large-file-verification "$fixture_directory"
 
 print "[6/7] 产物、平台与隐私静态检查"
+zsh -n "$SCRIPT_DIR/clean-build-artifacts.sh"
+cleanup_preview="$($SCRIPT_DIR/clean-build-artifacts.sh)"
+[[ "$cleanup_preview" == *"当前仅预览，没有删除任何文件。"* ]] \
+    || fail "构建清理脚本默认模式不是只读预览。"
+[[ -d .build ]] || fail "构建清理脚本预览模式误删了 .build。"
 app_path=".build/XcodeDerivedData/Build/Products/Release/LacEditor.app"
 info_plist="$app_path/Contents/Info.plist"
 binary="$app_path/Contents/MacOS/LacEditor"
 [[ -d "$app_path" ]] || fail "缺少 Release App 产物。"
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$info_plist")" == "14.0" ]] \
-    || fail "最低系统版本不是 macOS 14.0。"
+[[ "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$info_plist")" == "26.0" ]] \
+    || fail "最低系统版本不是 macOS 26.0。"
 [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")" \
     == "$(tr -d '[:space:]' < VERSION)" ]] || fail "App 产物版本与 VERSION 不一致。"
 architectures="$(lipo -archs "$binary")"
-[[ "$architectures" == *arm64* && "$architectures" == *x86_64* ]] \
-    || fail "Release App 不是 arm64 + x86_64 双架构。"
+[[ "$architectures" == "arm64" ]] \
+    || fail "Release App 不是 Apple Silicon arm64 架构。"
 
 for size in 16 32 128 256 512; do
     icon_1x="LacEditor/Assets.xcassets/AppIcon.appiconset/icon_${size}x${size}.png"
