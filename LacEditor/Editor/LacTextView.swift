@@ -21,14 +21,14 @@ extension NSColor {
                 calibratedRed: 0.48,
                 green: 0.53,
                 blue: 0.88,
-                alpha: 0.085
+                alpha: 0.14
             )
         }
         return NSColor(
             calibratedRed: 0.31,
             green: 0.34,
             blue: 0.66,
-            alpha: 0.035
+            alpha: 0.07
         )
     }
 

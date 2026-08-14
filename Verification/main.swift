@@ -40,12 +40,41 @@ require(
 )
 
 do {
-    let pretty = try JSONFormatter.format(#"{"name":"LacEditor","enabled":true}"#, pretty: true)
-    require(pretty.contains(#""enabled" : true"#), "pretty JSON output")
+    let orderedSource = #"{"z":1,"a":2,"z":3,"nested":{"b":1,"a":2},"number":1.2300e+04}"#
+    let pretty = try JSONFormatter.format(orderedSource, pretty: true)
+    require(pretty.contains(#""z" : 1"#), "pretty JSON output")
     require(pretty.hasSuffix("\n"), "pretty JSON trailing newline")
+    require(
+        pretty.range(of: #""z" : 1"#)!.lowerBound
+            < pretty.range(of: #""a" : 2"#)!.lowerBound,
+        "pretty JSON preserves source key order"
+    )
+    require(
+        pretty.components(separatedBy: #""z" :"#).count == 3,
+        "pretty JSON preserves duplicate keys"
+    )
+    require(pretty.contains("1.2300e+04"), "pretty JSON preserves number spelling")
 
     let compact = try JSONFormatter.format(#"{ "items": [1, 2, 3] }"#, pretty: false)
     require(compact == #"{"items":[1,2,3]}"#, "compact JSON output")
+
+    let compactOrdered = try JSONFormatter.format(orderedSource, pretty: false)
+    require(compactOrdered == orderedSource, "compact JSON preserves order and tokens")
+    require(
+        (try? JSONSerialization.jsonObject(with: Data(pretty.utf8))) != nil,
+        "pretty output remains valid JSON"
+    )
+
+    do {
+        _ = try JSONFormatter.format(
+            String(repeating: #"{"value":1}"#, count: 1_000),
+            pretty: true,
+            isCancelled: { true }
+        )
+        fatalError("Verification failed: cancelled JSON formatting continued")
+    } catch is CancellationError {
+        // Expected.
+    }
 
     do {
         _ = try JSONFormatter.format(#"{"broken": }"#, pretty: true)

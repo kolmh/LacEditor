@@ -10,8 +10,9 @@ final class WindowManager: ObservableObject {
 
     let recentFiles = RecentFilesStore()
     let sidebarLibrary = SidebarLibraryStore()
-    let preferences = AppPreferences()
+    let preferences: AppPreferences
     let recoveryStore: DocumentRecoveryStore?
+    let workspaceStore: WorkspaceSessionStore?
     @Published private(set) var activeState: AppState?
     @Published private(set) var draggedDocumentID: UUID?
     private(set) var terminationApproved = false
@@ -39,15 +40,32 @@ final class WindowManager: ObservableObject {
     private var sidebarLibraryCancellable: AnyCancellable?
     private let fileService = FileService()
     private var recoveredDocuments: [EditorDocument] = []
+    private struct RestoredWindow {
+        let documents: [EditorDocument]
+        let selectedDocumentID: UUID?
+        let isSidebarVisible: Bool
+        let frame: WorkspaceWindowFrame?
+    }
+    private var initialRestoredWindow: RestoredWindow?
+    private var pendingRestoredWindows: [RestoredWindow] = []
+    private var didApplyInitialRestoration = false
     private lazy var appearanceMenuController = AppearanceMenuController(
         windowManager: self
     )
 
-    init(recoveryStore: DocumentRecoveryStore? = nil) {
+    init(
+        recoveryStore: DocumentRecoveryStore? = nil,
+        workspaceStore: WorkspaceSessionStore? = nil,
+        preferences: AppPreferences? = nil
+    ) {
         self.recoveryStore = recoveryStore
-        if let snapshots = try? recoveryStore?.startSession() {
-            recoveredDocuments = snapshots.map(Self.makeRecoveredDocument)
-        }
+        self.workspaceStore = workspaceStore
+        self.preferences = preferences ?? AppPreferences()
+        let recoverySnapshots = (try? recoveryStore?.startSession()) ?? []
+        restoreInitialSession(
+            workspace: try? workspaceStore?.loadAndConsume(),
+            recoverySnapshots: recoverySnapshots
+        )
         recentFilesCancellable = recentFiles.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
@@ -72,6 +90,15 @@ final class WindowManager: ObservableObject {
         state.hostWindow = window
         if window.isKeyWindow || activeState == nil {
             activate(windowID: windowID)
+        }
+        guard !didApplyInitialRestoration,
+              let restoration = initialRestoredWindow else { return }
+        didApplyInitialRestoration = true
+        apply(restoration, to: state, window: window)
+        let additionalWindows = pendingRestoredWindows
+        pendingRestoredWindows.removeAll()
+        DispatchQueue.main.async { [weak self] in
+            additionalWindows.forEach { self?.openRestoredWindow($0) }
         }
     }
 
@@ -141,6 +168,48 @@ final class WindowManager: ObservableObject {
             configureEditorWindowChrome(window)
         }
         return state
+    }
+
+    private func openRestoredWindow(_ restoration: RestoredWindow) {
+        let windowID = UUID()
+        let state = AppState(
+            initialDocuments: restoration.documents,
+            recentFiles: recentFiles,
+            preferences: preferences,
+            recoveryStore: recoveryStore
+        )
+        state.windowManager = self
+        state.selectedDocumentID = resolvedSelectedDocumentID(for: restoration)
+        state.isSidebarVisible = restoration.isSidebarVisible
+        states[windowID] = state
+
+        let rootView = EditorWindowRoot(
+            appState: state,
+            windowManager: self,
+            windowID: windowID
+        )
+        let hostingController = NSHostingController(rootView: rootView)
+        let window = NSWindow(contentViewController: hostingController)
+        window.styleMask = [
+            .titled,
+            .closable,
+            .miniaturizable,
+            .resizable,
+            .fullSizeContentView
+        ]
+        window.title = state.windowTitle
+        configureEditorWindowChrome(window)
+        window.minSize = NSSize(width: 900, height: 560)
+        applyFrame(restoration.frame, to: window)
+        window.isReleasedWhenClosed = false
+
+        let controller = NSWindowController(window: window)
+        windowControllers[windowID] = controller
+        controller.showWindow(nil)
+        DispatchQueue.main.async { [weak window] in
+            guard let window else { return }
+            configureEditorWindowChrome(window)
+        }
     }
 
     func openFileInNewWindow(_ url: URL) {
@@ -478,18 +547,40 @@ final class WindowManager: ObservableObject {
         confirmClosingStates(Array(states.values), completion: completion)
     }
 
+    func requestApplicationTermination(
+        completion: @escaping (Bool) -> Void
+    ) {
+        switch preferences.workspaceExitBehavior {
+        case .askToSave:
+            confirmClosingAllWindows(completion: completion)
+        case .preserveWorkspace:
+            if hasDirtyDocuments,
+               !preferences.hasConfirmedWorkspaceExitPrompt {
+                presentFirstWorkspaceExitPrompt(completion: completion)
+            } else {
+                preserveWorkspaceAndTerminate(completion: completion)
+            }
+        }
+    }
+
     private func confirmClosingStates(
         _ queue: [AppState],
         completion: @escaping (Bool) -> Void
     ) {
         guard let state = queue.first else {
             terminationApproved = true
-            guard let recoveryStore else {
-                completion(true)
+            guard let workspaceStore else {
+                finishCleanRecovery(completion: completion)
                 return
             }
-            recoveryStore.finishCleanly {
-                completion(true)
+            workspaceStore.clear { [weak self] in
+                guard let self, let recoveryStore else {
+                    completion(true)
+                    return
+                }
+                recoveryStore.finishCleanly {
+                    completion(true)
+                }
             }
             return
         }
@@ -526,6 +617,138 @@ final class WindowManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
             self?.waitForPendingSaves(completion: completion)
         }
+    }
+
+    private var hasDirtyDocuments: Bool {
+        states.values.contains { state in
+            state.documents.contains { $0.isDirty || $0.hasPendingLiveEdits }
+        }
+    }
+
+    private func presentFirstWorkspaceExitPrompt(
+        completion: @escaping (Bool) -> Void
+    ) {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "退出并保留当前工作区？"
+        alert.informativeText = """
+        所有窗口、标签和未保存内容会在下次启动时恢复。磁盘文件不会被自动修改。
+        """
+        alert.addButton(withTitle: "保留并退出")
+        alert.addButton(withTitle: "检查未保存文件")
+        alert.addButton(withTitle: "取消")
+        present(alert) { [weak self] response in
+            guard let self else {
+                completion(false)
+                return
+            }
+            switch response {
+            case .alertFirstButtonReturn:
+                preferences.confirmWorkspaceExitPrompt()
+                preserveWorkspaceAndTerminate(completion: completion)
+            case .alertSecondButtonReturn:
+                confirmClosingAllWindows(completion: completion)
+            default:
+                completion(false)
+            }
+        }
+    }
+
+    private func preserveWorkspaceAndTerminate(
+        completion: @escaping (Bool) -> Void
+    ) {
+        terminationApproved = false
+        waitForPendingSaves { [weak self] in
+            guard let self else {
+                completion(false)
+                return
+            }
+            let snapshot = captureWorkspaceSnapshot()
+            guard let workspaceStore else {
+                confirmClosingAllWindows(completion: completion)
+                return
+            }
+            workspaceStore.save(snapshot) { [weak self] result in
+                guard let self else {
+                    completion(false)
+                    return
+                }
+                switch result {
+                case .success:
+                    terminationApproved = true
+                    guard let recoveryStore else {
+                        completion(true)
+                        return
+                    }
+                    recoveryStore.finishCleanly {
+                        completion(true)
+                    }
+                case let .failure(error):
+                    presentWorkspaceSaveError(error)
+                    completion(false)
+                }
+            }
+        }
+    }
+
+    private func captureWorkspaceSnapshot() -> WorkspaceSessionSnapshot {
+        let orderedStates = NSApp.orderedWindows.compactMap { window in
+            states.values.first(where: { $0.hostWindow === window })
+        }
+        let remainingStates = states.values.filter { state in
+            !orderedStates.contains(where: { $0 === state })
+        }
+        let windows = (orderedStates + remainingStates).map { state in
+            let documents = state.documents.map { document in
+                WorkspaceDocumentSnapshot(
+                    documentID: document.id,
+                    text: document.synchronizedText(),
+                    sourceURL: document.url,
+                    language: document.language,
+                    encoding: document.fileEncoding,
+                    isDirty: document.isDirty,
+                    selectionRange: document.selectionRange,
+                    scrollPositionRatio: document.scrollPositionRatio,
+                    isPreviewVisible: document.isPreviewVisible,
+                    fileRevisionSnapshot: document.fileRevisionSnapshot
+                )
+            }
+            let frame = state.hostWindow.map {
+                WorkspaceWindowFrame(
+                    x: Double($0.frame.origin.x),
+                    y: Double($0.frame.origin.y),
+                    width: Double($0.frame.width),
+                    height: Double($0.frame.height)
+                )
+            }
+            return WorkspaceWindowSnapshot(
+                documents: documents,
+                selectedDocumentID: state.selectedDocumentID,
+                isSidebarVisible: state.isSidebarVisible,
+                frame: frame
+            )
+        }
+        return WorkspaceSessionSnapshot(windows: windows)
+    }
+
+    private func presentWorkspaceSaveError(_ error: Error) {
+        let alert = NSAlert(error: error)
+        alert.alertStyle = .critical
+        alert.messageText = "无法保留工作区"
+        alert.informativeText = "工作区没有完整写入，LacEditor 已取消退出。\n\n\(error.localizedDescription)"
+        if let window = activeState?.hostWindow {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    private func finishCleanRecovery(completion: @escaping (Bool) -> Void) {
+        guard let recoveryStore else {
+            completion(true)
+            return
+        }
+        recoveryStore.finishCleanly { completion(true) }
     }
 
     private func transferDocument(
@@ -600,6 +823,133 @@ final class WindowManager: ObservableObject {
             x: min(max(desired.x, visible.minX), visible.maxX - size.width),
             y: min(max(desired.y, visible.minY), visible.maxY - size.height)
         ))
+    }
+
+    private func restoreInitialSession(
+        workspace: WorkspaceSessionSnapshot?,
+        recoverySnapshots: [DocumentRecoverySnapshot]
+    ) {
+        var recoveryByID = Dictionary(
+            uniqueKeysWithValues: recoverySnapshots.map { ($0.documentID, $0) }
+        )
+        if let workspace, !workspace.windows.isEmpty {
+            let restored = workspace.windows.map { window in
+                let documents = window.documents.map { snapshot in
+                    if let recovery = recoveryByID.removeValue(
+                        forKey: snapshot.documentID
+                    ) {
+                        return Self.makeRecoveredDocument(from: recovery)
+                    }
+                    return Self.makeWorkspaceDocument(from: snapshot)
+                }
+                return RestoredWindow(
+                    documents: documents,
+                    selectedDocumentID: window.selectedDocumentID,
+                    isSidebarVisible: window.isSidebarVisible,
+                    frame: window.frame
+                )
+            }
+            var windows = restored
+            if !recoveryByID.isEmpty {
+                let extras = recoveryByID.values
+                    .sorted { $0.capturedAt < $1.capturedAt }
+                    .map(Self.makeRecoveredDocument)
+                if windows.isEmpty {
+                    windows = [RestoredWindow(
+                        documents: extras,
+                        selectedDocumentID: extras.first?.id,
+                        isSidebarVisible: true,
+                        frame: nil
+                    )]
+                } else {
+                    let first = windows[0]
+                    windows[0] = RestoredWindow(
+                        documents: first.documents + extras,
+                        selectedDocumentID: first.selectedDocumentID,
+                        isSidebarVisible: first.isSidebarVisible,
+                        frame: first.frame
+                    )
+                }
+            }
+            initialRestoredWindow = windows.first
+            pendingRestoredWindows = Array(windows.dropFirst())
+            recoveredDocuments = windows.first?.documents ?? []
+            return
+        }
+        recoveredDocuments = recoverySnapshots.map(Self.makeRecoveredDocument)
+    }
+
+    private func apply(
+        _ restoration: RestoredWindow,
+        to state: AppState,
+        window: NSWindow
+    ) {
+        state.selectedDocumentID = resolvedSelectedDocumentID(for: restoration)
+        state.isSidebarVisible = restoration.isSidebarVisible
+        applyFrame(restoration.frame, to: window)
+    }
+
+    private func resolvedSelectedDocumentID(
+        for restoration: RestoredWindow
+    ) -> UUID? {
+        if let selectedDocumentID = restoration.selectedDocumentID,
+           restoration.documents.contains(where: {
+               $0.id == selectedDocumentID
+           }) {
+            return selectedDocumentID
+        }
+        return restoration.documents.first?.id
+    }
+
+    private func applyFrame(
+        _ storedFrame: WorkspaceWindowFrame?,
+        to window: NSWindow
+    ) {
+        guard let storedFrame else {
+            window.setContentSize(NSSize(width: 1120, height: 720))
+            window.center()
+            return
+        }
+        var frame = NSRect(
+            x: storedFrame.x,
+            y: storedFrame.y,
+            width: max(900, storedFrame.width),
+            height: max(560, storedFrame.height)
+        )
+        let screen = NSScreen.screens.first(where: {
+            $0.visibleFrame.intersects(frame)
+        }) ?? NSScreen.main
+        if let visible = screen?.visibleFrame {
+            frame.size.width = min(frame.width, visible.width)
+            frame.size.height = min(frame.height, visible.height)
+            frame.origin.x = min(max(frame.minX, visible.minX), visible.maxX - frame.width)
+            frame.origin.y = min(max(frame.minY, visible.minY), visible.maxY - frame.height)
+        }
+        window.setFrame(frame, display: true)
+    }
+
+    private static func makeWorkspaceDocument(
+        from snapshot: WorkspaceDocumentSnapshot
+    ) -> EditorDocument {
+        let document = EditorDocument(
+            id: snapshot.documentID,
+            text: snapshot.text,
+            url: snapshot.sourceURL,
+            language: snapshot.language,
+            fileEncoding: snapshot.encoding,
+            fileRevisionSnapshot: snapshot.fileRevisionSnapshot,
+            isDirty: snapshot.isDirty,
+            requiresExplicitSave: snapshot.isDirty
+        )
+        document.selectionRange = snapshot.selectionRange
+        document.scrollPositionRatio = snapshot.scrollPositionRatio
+        document.isPreviewVisible = snapshot.language == .markdown
+            && snapshot.isPreviewVisible
+            && document.performanceProfile == .standard
+        if snapshot.isDirty {
+            document.statusMessage = "已恢复上次工作区，尚未保存"
+        }
+        return document
     }
 
     private static func makeRecoveredDocument(

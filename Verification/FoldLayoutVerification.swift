@@ -3,6 +3,8 @@ import AppKit
 @main
 enum FoldLayoutVerification {
     static func main() {
+        verifyEditorLineSpacing()
+
         let body = (1...80).map { "body-\($0)\n" }.joined()
         let source = "# Heading\n\(body)# Next\nvisible\n"
         let storage = NSTextStorage(
@@ -168,6 +170,93 @@ enum FoldLayoutVerification {
         )
 
         print("Fold layout verification passed")
+    }
+
+    private static func verifyEditorLineSpacing() {
+        let source = "first line\nsecond line\n"
+        let baselineSpacing = lineOriginSpacing(
+            source: source,
+            width: 480,
+            layoutManager: NSLayoutManager()
+        )
+        let editorSpacing = lineOriginSpacing(
+            source: source,
+            width: 480,
+            layoutManager: FoldLayoutManager()
+        )
+        require(
+            abs(
+                editorSpacing - baselineSpacing
+                    - FoldLayoutManager.defaultLineSpacing
+            ) < 0.5,
+            "editor layout adds the configured line spacing"
+        )
+
+        let wrappedSource = String(repeating: "wrapped content ", count: 12)
+        let baselineWrappedSpacing = lineOriginSpacing(
+            source: wrappedSource,
+            width: 120,
+            layoutManager: NSLayoutManager()
+        )
+        let editorWrappedSpacing = lineOriginSpacing(
+            source: wrappedSource,
+            width: 120,
+            layoutManager: FoldLayoutManager()
+        )
+        require(
+            abs(
+                editorWrappedSpacing - baselineWrappedSpacing
+                    - FoldLayoutManager.defaultLineSpacing
+            ) < 0.5,
+            "wrapped visual lines use the same line spacing"
+        )
+
+        let customizedLayoutManager = FoldLayoutManager()
+        customizedLayoutManager.editorLineSpacing = 8
+        let customizedSpacing = lineOriginSpacing(
+            source: source,
+            width: 480,
+            layoutManager: customizedLayoutManager
+        )
+        require(
+            abs(customizedSpacing - baselineSpacing - 8) < 0.5,
+            "custom editor line spacing changes layout"
+        )
+    }
+
+    private static func lineOriginSpacing(
+        source: String,
+        width: CGFloat,
+        layoutManager: NSLayoutManager
+    ) -> CGFloat {
+        let storage = NSTextStorage(
+            string: source,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(
+                    ofSize: 14,
+                    weight: .regular
+                )
+            ]
+        )
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(
+            containerSize: NSSize(width: width, height: 2_000)
+        )
+        container.lineFragmentPadding = 0
+        layoutManager.addTextContainer(container)
+        layoutManager.ensureLayout(for: container)
+
+        var lineOrigins: [CGFloat] = []
+        layoutManager.enumerateLineFragments(
+            forGlyphRange: NSRange(location: 0, length: layoutManager.numberOfGlyphs)
+        ) { rect, _, _, _, stop in
+            lineOrigins.append(rect.minY)
+            if lineOrigins.count == 2 {
+                stop.pointee = true
+            }
+        }
+        require(lineOrigins.count == 2, "test text produces two visual lines")
+        return lineOrigins[1] - lineOrigins[0]
     }
 
     private static func require(

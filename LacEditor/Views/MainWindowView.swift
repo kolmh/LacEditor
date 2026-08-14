@@ -99,6 +99,7 @@ struct MainWindowView: View {
                     document: selectedDocument,
                     sessionStore: editorSessions,
                     fontSize: appState.editorFontSize,
+                    lineSpacing: appState.editorLineSpacing,
                     wordWrap: selectedDocument.effectiveWordWrap(
                         globalDefault: appState.isWordWrapEnabled
                     ),
@@ -137,6 +138,7 @@ private struct DocumentEditorPane: View {
     @ObservedObject var document: EditorDocument
     let sessionStore: EditorSessionStore
     let fontSize: CGFloat
+    let lineSpacing: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
     let editorTopInset: CGFloat
@@ -177,6 +179,7 @@ private struct DocumentEditorPane: View {
             document: document,
             sessionStore: sessionStore,
             fontSize: fontSize,
+            lineSpacing: lineSpacing,
             wordWrap: wordWrap,
             showsLineNumbers: showsLineNumbers,
             topInset: editorTopInset,

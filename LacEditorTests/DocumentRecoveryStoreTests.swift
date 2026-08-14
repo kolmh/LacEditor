@@ -3,6 +3,75 @@ import XCTest
 @testable import LacEditor
 
 final class DocumentRecoveryStoreTests: XCTestCase {
+    func testWorkspaceSessionRoundTripPreservesWindowsTabsAndContent() throws {
+        let directory = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = WorkspaceSessionStore(
+            rootURL: directory.appendingPathComponent("Workspace")
+        )
+        let firstID = UUID()
+        let secondID = UUID()
+        let snapshot = WorkspaceSessionSnapshot(windows: [
+            WorkspaceWindowSnapshot(
+                documents: [
+                    WorkspaceDocumentSnapshot(
+                        documentID: firstID,
+                        text: "未保存内容",
+                        sourceURL: nil,
+                        language: .markdown,
+                        encoding: .utf8,
+                        isDirty: true,
+                        selectionRange: NSRange(location: 3, length: 2),
+                        scrollPositionRatio: 0.4,
+                        isPreviewVisible: true,
+                        fileRevisionSnapshot: nil
+                    ),
+                    WorkspaceDocumentSnapshot(
+                        documentID: secondID,
+                        text: #"{"z":1,"a":2}"#,
+                        sourceURL: directory.appendingPathComponent("config.json"),
+                        language: .json,
+                        encoding: .utf8,
+                        isDirty: false,
+                        selectionRange: NSRange(location: 5, length: 0),
+                        scrollPositionRatio: 0.8,
+                        isPreviewVisible: false,
+                        fileRevisionSnapshot: nil
+                    )
+                ],
+                selectedDocumentID: secondID,
+                isSidebarVisible: false,
+                frame: WorkspaceWindowFrame(
+                    x: 120,
+                    y: 160,
+                    width: 1_100,
+                    height: 720
+                )
+            ),
+            WorkspaceWindowSnapshot(
+                documents: [WorkspaceDocumentSnapshot(
+                    documentID: UUID(),
+                    text: "second window",
+                    sourceURL: nil,
+                    language: .plainText,
+                    encoding: .utf8,
+                    isDirty: true,
+                    selectionRange: NSRange(location: 2, length: 0),
+                    scrollPositionRatio: 0.2,
+                    isPreviewVisible: false,
+                    fileRevisionSnapshot: nil
+                )],
+                selectedDocumentID: nil,
+                isSidebarVisible: true,
+                frame: nil
+            )
+        ])
+
+        try store.saveForTesting(snapshot)
+        XCTAssertEqual(try store.loadAndConsume(), snapshot)
+        XCTAssertNil(try store.loadAndConsume())
+    }
+
     func testAbnormalSessionRestoresLatestAtomicSnapshot() throws {
         let directory = makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -3,6 +3,46 @@ import XCTest
 @testable import LacEditor
 
 final class StabilityTests: XCTestCase {
+    func testJSONFormattingPreservesObjectOrderAndLexemes() throws {
+        let source = #"{"z":1,"a":2,"z":3,"nested":{"b":true,"a":null},"number":1.2300e+04,"escaped":"a\\/b\\u4F60"}"#
+        let pretty = try JSONFormatter.format(source, pretty: true)
+        let compact = try JSONFormatter.format(source, pretty: false)
+
+        XCTAssertLessThan(
+            try XCTUnwrap(pretty.range(of: #""z" : 1"#)?.lowerBound),
+            try XCTUnwrap(pretty.range(of: #""a" : 2"#)?.lowerBound)
+        )
+        XCTAssertEqual(pretty.components(separatedBy: #""z" :"#).count, 3)
+        XCTAssertTrue(pretty.contains("1.2300e+04"))
+        XCTAssertTrue(pretty.contains(#""escaped" : "a\\/b\\u4F60""#))
+        XCTAssertEqual(compact, source)
+        XCTAssertNoThrow(
+            try JSONSerialization.jsonObject(with: Data(pretty.utf8))
+        )
+    }
+
+    func testJSONFormattingRejectsInvalidTokensAndSupportsCancellation() throws {
+        for source in [
+            #"{"a":01}"#,
+            #"{"a":1,}"#,
+            #"[1,]"#,
+            #"{"a":"\x"}"#,
+            #"true false"#
+        ] {
+            XCTAssertThrowsError(try JSONFormatter.format(source, pretty: true), source)
+        }
+
+        XCTAssertThrowsError(
+            try JSONFormatter.format(
+                String(repeating: " ", count: 8_192) + "null",
+                pretty: false,
+                isCancelled: { true }
+            )
+        ) { error in
+            XCTAssertTrue(error is CancellationError)
+        }
+    }
+
     func testLineNumberGeometryTracksScrollAndLineCenter() {
         let textLine = NSRect(x: 0, y: 240, width: 500, height: 24)
         let contentLayout = NSRect(x: 0, y: 72, width: 44, height: 600)
@@ -155,14 +195,25 @@ final class StabilityTests: XCTestCase {
 
         first.isWordWrapEnabled = false
         first.editorFontSize = 18
+        first.editorLineSpacing = 7
+        first.workspaceExitBehavior = .askToSave
         first.theme = .dark
         XCTAssertFalse(second.isWordWrapEnabled)
         XCTAssertEqual(second.editorFontSize, 18)
+        XCTAssertEqual(second.editorLineSpacing, 7)
+        XCTAssertEqual(second.workspaceExitBehavior, .askToSave)
         XCTAssertEqual(second.theme, .dark)
+
+        first.resetLineSpacing()
+        XCTAssertEqual(first.editorLineSpacing, AppPreferences.defaultLineSpacing)
+        XCTAssertEqual(second.editorLineSpacing, AppPreferences.defaultLineSpacing)
+        first.editorLineSpacing = 7
 
         let restored = AppPreferences(defaults: defaults)
         XCTAssertFalse(restored.wordWrapEnabled)
         XCTAssertEqual(restored.editorFontSize, 18)
+        XCTAssertEqual(restored.editorLineSpacing, 7)
+        XCTAssertEqual(restored.workspaceExitBehavior, .askToSave)
         XCTAssertEqual(restored.theme, .dark)
     }
 

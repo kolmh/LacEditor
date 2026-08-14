@@ -10,7 +10,10 @@ struct LacEditorApp: App {
     private let primaryWindowID: UUID
 
     init() {
-        let manager = WindowManager(recoveryStore: DocumentRecoveryStore())
+        let manager = WindowManager(
+            recoveryStore: DocumentRecoveryStore(),
+            workspaceStore: WorkspaceSessionStore()
+        )
         let recoveredDocuments = manager.takeRecoveredDocuments()
         let state = AppState(
             initialDocuments: recoveredDocuments,
@@ -46,7 +49,7 @@ struct LacEditorApp: App {
                 windowManager: windowManager
             )
         }
-        .defaultSize(width: 540, height: 440)
+        .defaultSize(width: 540, height: 570)
         .windowResizability(.contentSize)
     }
 }
@@ -160,11 +163,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let finish = { shouldTerminate in
             sender.reply(toApplicationShouldTerminate: shouldTerminate)
         }
-        if manager.hasPendingSaves {
-            manager.finishTerminationAfterPendingSaves(completion: finish)
-        } else {
-            manager.confirmClosingAllWindows(completion: finish)
-        }
+        manager.requestApplicationTermination(completion: finish)
         return .terminateLater
     }
 }

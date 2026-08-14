@@ -4,6 +4,66 @@ import XCTest
 
 @MainActor
 final class WindowAndSessionTests: XCTestCase {
+    func testPreservedWorkspaceRestoresTabOrderAndDirtyState() async throws {
+        _ = NSApplication.shared
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let suiteName = "LacEditorWorkspaceTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let preferences = AppPreferences(defaults: defaults)
+        preferences.confirmWorkspaceExitPrompt()
+        let workspaceStore = WorkspaceSessionStore(
+            rootURL: directory.appendingPathComponent("Workspace")
+        )
+        let manager = WindowManager(
+            workspaceStore: workspaceStore,
+            preferences: preferences
+        )
+        let first = EditorDocument(
+            text: "draft",
+            language: .markdown,
+            isDirty: true,
+            requiresExplicitSave: true
+        )
+        let second = EditorDocument(text: #"{"z":1,"a":2}"#, language: .json)
+        let state = AppState(
+            initialDocuments: [first, second],
+            recentFiles: manager.recentFiles,
+            preferences: preferences
+        )
+        state.selectedDocumentID = second.id
+        state.isSidebarVisible = false
+        let window = makeWindow(title: "Workspace")
+        let windowID = UUID()
+        manager.register(windowID: windowID, state: state, window: window)
+
+        let shouldTerminate = await withCheckedContinuation { continuation in
+            manager.requestApplicationTermination {
+                continuation.resume(returning: $0)
+            }
+        }
+        XCTAssertTrue(shouldTerminate)
+        manager.unregister(windowID: windowID)
+        window.close()
+
+        let restoredManager = WindowManager(
+            workspaceStore: workspaceStore,
+            preferences: preferences
+        )
+        let restored = restoredManager.takeRecoveredDocuments()
+        XCTAssertEqual(restored.map(\.id), [first.id, second.id])
+        XCTAssertEqual(restored.map(\.text), ["draft", #"{"z":1,"a":2}"#])
+        XCTAssertTrue(restored[0].isDirty)
+        XCTAssertFalse(restored[1].isDirty)
+        XCTAssertEqual(restored[0].statusMessage, "已恢复上次工作区，尚未保存")
+    }
+
     func testRealWindowsRegisterAndCrossWindowTabDragMovesDocument() {
         _ = NSApplication.shared
         let manager = WindowManager()

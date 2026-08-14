@@ -11,6 +11,7 @@ struct EditorTextView: NSViewRepresentable {
     @ObservedObject var document: EditorDocument
     let sessionStore: EditorSessionStore
     let fontSize: CGFloat
+    let lineSpacing: CGFloat
     let wordWrap: Bool
     let showsLineNumbers: Bool
     let topInset: CGFloat
@@ -54,6 +55,7 @@ struct EditorTextView: NSViewRepresentable {
 
         let textStorage = NSTextStorage()
         let layoutManager = FoldLayoutManager()
+        layoutManager.editorLineSpacing = lineSpacing
         EditorLayoutPolicy.configure(
             layoutManager,
             textLength: (document.text as NSString).length
@@ -157,6 +159,8 @@ struct EditorTextView: NSViewRepresentable {
         textView.textTransformationHandler = requestTextTransformation
         let documentChanged = context.coordinator.document.id != document.id
         let fontChanged = context.coordinator.currentFontSize != fontSize
+        let lineSpacingChanged = context.coordinator.foldLayoutManager?
+            .editorLineSpacing != lineSpacing
         let languageChanged = context.coordinator.currentLanguage != document.language
         if documentChanged || languageChanged {
             context.coordinator.resetSyntaxHighlightContext()
@@ -164,6 +168,7 @@ struct EditorTextView: NSViewRepresentable {
         context.coordinator.document = document
         context.coordinator.currentFontSize = fontSize
         context.coordinator.currentLanguage = document.language
+        context.coordinator.foldLayoutManager?.editorLineSpacing = lineSpacing
         context.coordinator.updatePerformanceFeatures()
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
         context.coordinator.updateTopInset(topInset)
@@ -199,7 +204,10 @@ struct EditorTextView: NSViewRepresentable {
             context.coordinator.lastSynchronizedRevision = document.textRevision
         }
 
-        context.coordinator.updateLayout(wordWrap: wordWrap)
+        context.coordinator.updateLayout(
+            wordWrap: wordWrap,
+            force: lineSpacingChanged
+        )
         if fontChanged {
             textView.font = editorFont(size: fontSize)
         }

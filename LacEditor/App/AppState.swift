@@ -174,6 +174,10 @@ final class AppState: ObservableObject {
         get { preferences.editorFontSize }
         set { preferences.editorFontSize = newValue }
     }
+    var editorLineSpacing: CGFloat {
+        get { preferences.editorLineSpacing }
+        set { preferences.editorLineSpacing = newValue }
+    }
     var isLineNumbersVisible: Bool {
         get { preferences.lineNumbersVisible }
         set { preferences.lineNumbersVisible = newValue }
@@ -185,6 +189,10 @@ final class AppState: ObservableObject {
     var theme: AppTheme {
         get { preferences.theme }
         set { preferences.theme = newValue }
+    }
+    var workspaceExitBehavior: WorkspaceExitBehavior {
+        get { preferences.workspaceExitBehavior }
+        set { preferences.workspaceExitBehavior = newValue }
     }
 
     let recentFiles: RecentFilesStore
@@ -846,8 +854,14 @@ final class AppState: ObservableObject {
         let source = document.synchronizedText()
         let revision = document.textRevision
         document.statusMessage = pretty ? "正在格式化 JSON…" : "正在压缩 JSON…"
-        performDocumentTask(document, kind: .json) {
-            Result { try JSONFormatter.format(source, pretty: pretty) }
+        performCancellableDocumentTask(document, kind: .json) { isCancelled in
+            Result {
+                try JSONFormatter.format(
+                    source,
+                    pretty: pretty,
+                    isCancelled: isCancelled
+                )
+            }
         } completion: { [weak self, weak document] result in
             guard let self, let document,
                   self.isTaskResultCurrent(document, revision: revision) else { return }
@@ -1190,6 +1204,14 @@ final class AppState: ObservableObject {
 
     var isUsingDefaultFontSize: Bool {
         editorFontSize == AppPreferences.defaultFontSize
+    }
+
+    func resetLineSpacing() {
+        editorLineSpacing = AppPreferences.defaultLineSpacing
+    }
+
+    var isUsingDefaultLineSpacing: Bool {
+        editorLineSpacing == AppPreferences.defaultLineSpacing
     }
 
     func updateRenamedFileReference(from oldURL: URL, to newURL: URL) {

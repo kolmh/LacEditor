@@ -49,6 +49,20 @@ struct SettingsView: View {
 
                 GridRow {
                     settingLabel(
+                        title: "退出行为",
+                        detail: "保留工作区时不会修改磁盘文件，下次启动自动恢复全部窗口、标签和未保存内容。"
+                    )
+                    Picker("退出行为", selection: $appState.workspaceExitBehavior) {
+                        ForEach(WorkspaceExitBehavior.allCases) { behavior in
+                            Text(behavior.displayName).tag(behavior)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 250)
+                }
+
+                GridRow {
+                    settingLabel(
                         title: "编辑器字体",
                         detail: "调整所有标签页的等宽字体大小，默认 14 pt。"
                     )
@@ -71,6 +85,31 @@ struct SettingsView: View {
                         .stableHelp("恢复默认字体大小", shortcut: "⌘0")
                     }
                 }
+
+                GridRow {
+                    settingLabel(
+                        title: "编辑器行距",
+                        detail: "调整文字行高，默认额外增加 4 pt。"
+                    )
+                    HStack(spacing: 12) {
+                        Stepper(
+                            "\(Int(appState.editorLineSpacing)) pt",
+                            value: $appState.editorLineSpacing,
+                            in: 0...10
+                        )
+                        .fixedSize()
+
+                        Button {
+                            appState.resetLineSpacing()
+                        } label: {
+                            Label("恢复默认", systemImage: "arrow.counterclockwise")
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .disabled(appState.isUsingDefaultLineSpacing)
+                        .stableHelp("恢复默认行距")
+                    }
+                }
             }
             .padding(.top, 22)
 
@@ -88,7 +127,7 @@ struct SettingsView: View {
             .padding(.top, 14)
         }
         .padding(28)
-        .frame(width: 540, height: 440)
+        .frame(width: 540, height: 570)
     }
 
     private func settingLabel(title: String, detail: String) -> some View {

@@ -22,6 +22,21 @@ enum EditorLayoutPolicy {
 }
 
 final class FoldLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
+    static let defaultLineSpacing: CGFloat = 4
+
+    var editorLineSpacing = FoldLayoutManager.defaultLineSpacing {
+        didSet {
+            guard editorLineSpacing != oldValue else { return }
+            invalidateLayout(
+                forCharacterRange: NSRange(
+                    location: 0,
+                    length: textStorage?.length ?? 0
+                ),
+                actualCharacterRange: nil
+            )
+        }
+    }
+
     private(set) var foldedRange: NSRange?
 
     override init() {
@@ -91,6 +106,14 @@ final class FoldLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
             )
         }
         return glyphRange.length
+    }
+
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        lineSpacingAfterGlyphAt glyphIndex: Int,
+        withProposedLineFragmentRect rect: NSRect
+    ) -> CGFloat {
+        editorLineSpacing
     }
 
     private func clampedRange(_ range: NSRange) -> NSRange? {
