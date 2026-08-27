@@ -43,6 +43,19 @@ final class AppPreferences: ObservableObject {
             defaults.set(Double(editorLineSpacing), forKey: Keys.lineSpacing)
         }
     }
+    @Published var indentationStyle: IndentationStyle {
+        didSet { defaults.set(indentationStyle.rawValue, forKey: Keys.indentationStyle) }
+    }
+    @Published var tabWidth: Int {
+        didSet {
+            let clamped = [2, 4, 8].contains(tabWidth) ? tabWidth : 4
+            if clamped != tabWidth {
+                tabWidth = clamped
+                return
+            }
+            defaults.set(tabWidth, forKey: Keys.tabWidth)
+        }
+    }
     @Published var lineNumbersVisible: Bool {
         didSet { defaults.set(lineNumbersVisible, forKey: Keys.lineNumbers) }
     }
@@ -76,6 +89,11 @@ final class AppPreferences: ObservableObject {
             ),
             10
         )
+        indentationStyle = IndentationStyle(
+            rawValue: defaults.string(forKey: Keys.indentationStyle) ?? ""
+        ) ?? .spaces
+        let storedTabWidth = defaults.integer(forKey: Keys.tabWidth)
+        tabWidth = [2, 4, 8].contains(storedTabWidth) ? storedTabWidth : 4
         lineNumbersVisible = defaults.object(forKey: Keys.lineNumbers) as? Bool ?? true
         statusBarVisible = defaults.object(forKey: Keys.statusBar) as? Bool ?? true
         let storedTheme = defaults.string(forKey: Keys.theme)
@@ -98,6 +116,8 @@ final class AppPreferences: ObservableObject {
         static let wordWrap = "isWordWrapEnabled"
         static let fontSize = "editorFontSize"
         static let lineSpacing = "editorLineSpacing"
+        static let indentationStyle = "editorIndentationStyle"
+        static let tabWidth = "editorTabWidth"
         static let lineNumbers = "isLineNumbersVisible"
         static let statusBar = "isStatusBarVisible"
         static let theme = "appTheme"

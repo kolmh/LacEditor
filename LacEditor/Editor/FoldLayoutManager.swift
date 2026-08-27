@@ -24,17 +24,32 @@ enum EditorLayoutPolicy {
 final class FoldLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     static let defaultLineSpacing: CGFloat = 4
 
+    /// The font selected by the user, not the fallback font AppKit may return
+    /// for the first glyph in the document. Keeping these metrics independent
+    /// of document contents prevents mixed CJK/Latin input from moving a line.
+    var textFont = NSFont(name: "Menlo-Regular", size: 14)
+        ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular) {
+        didSet {
+            guard textFont != oldValue else { return }
+            updateFontMetrics()
+            invalidateEditorLayout()
+        }
+    }
+
     var editorLineSpacing = FoldLayoutManager.defaultLineSpacing {
         didSet {
             guard editorLineSpacing != oldValue else { return }
-            invalidateLayout(
-                forCharacterRange: NSRange(
-                    location: 0,
-                    length: textStorage?.length ?? 0
-                ),
-                actualCharacterRange: nil
-            )
+            invalidateEditorLayout()
         }
+    }
+
+    private var cachedDefaultLineHeight: CGFloat = 1
+    private var cachedDefaultBaselineOffset: CGFloat = 0
+    private var groupsTemporaryAttributeUpdates = false
+    private var pendingTemporaryDisplayRange: NSRange?
+
+    var editorLineHeight: CGFloat {
+        max(1, cachedDefaultLineHeight + editorLineSpacing)
     }
 
     private(set) var foldedRange: NSRange?
@@ -42,11 +57,65 @@ final class FoldLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     override init() {
         super.init()
         delegate = self
+        updateFontMetrics()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         delegate = self
+        updateFontMetrics()
+    }
+
+    override func setExtraLineFragmentRect(
+        _ fragmentRect: NSRect,
+        usedRect: NSRect,
+        textContainer container: NSTextContainer
+    ) {
+        var fragmentRect = fragmentRect
+        var usedRect = usedRect
+        fragmentRect.size.height = editorLineHeight
+        usedRect.size.height = editorLineHeight
+        super.setExtraLineFragmentRect(
+            fragmentRect,
+            usedRect: usedRect,
+            textContainer: container
+        )
+    }
+
+    override func invalidateDisplay(forCharacterRange charRange: NSRange) {
+        guard groupsTemporaryAttributeUpdates else {
+            super.invalidateDisplay(forCharacterRange: charRange)
+            return
+        }
+        if let pendingTemporaryDisplayRange {
+            let start = min(pendingTemporaryDisplayRange.location, charRange.location)
+            let end = max(
+                NSMaxRange(pendingTemporaryDisplayRange),
+                NSMaxRange(charRange)
+            )
+            self.pendingTemporaryDisplayRange = NSRange(
+                location: start,
+                length: end - start
+            )
+        } else {
+            pendingTemporaryDisplayRange = charRange
+        }
+    }
+
+    /// Groups temporary syntax color changes into one display invalidation so
+    /// the screen never presents an intermediate, partially recolored frame.
+    func updateTemporaryAttributes(
+        in range: NSRange,
+        _ updates: () -> Void
+    ) {
+        let wasGrouping = groupsTemporaryAttributeUpdates
+        groupsTemporaryAttributeUpdates = true
+        updates()
+        groupsTemporaryAttributeUpdates = wasGrouping
+        guard !wasGrouping else { return }
+        let invalidatedRange = pendingTemporaryDisplayRange ?? range
+        pendingTemporaryDisplayRange = nil
+        super.invalidateDisplay(forCharacterRange: invalidatedRange)
     }
 
     func setFoldedRange(_ range: NSRange?) {
@@ -113,7 +182,57 @@ final class FoldLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         lineSpacingAfterGlyphAt glyphIndex: Int,
         withProposedLineFragmentRect rect: NSRect
     ) -> CGFloat {
-        editorLineSpacing
+        // Line spacing is encoded in each paragraph's fixed line height by
+        // LacTextView. Applying it here only affects glyph-backed lines and
+        // makes TextKit's trailing extra line fragment jump when typed into.
+        0
+    }
+
+    func layoutManager(
+        _ layoutManager: NSLayoutManager,
+        shouldSetLineFragmentRect lineFragmentRect: UnsafeMutablePointer<NSRect>,
+        lineFragmentUsedRect: UnsafeMutablePointer<NSRect>,
+        baselineOffset: UnsafeMutablePointer<CGFloat>,
+        in textContainer: NSTextContainer,
+        forGlyphRange glyphRange: NSRange
+    ) -> Bool {
+        lineFragmentRect.pointee.size.height = editorLineHeight
+        lineFragmentUsedRect.pointee.size.height = editorLineHeight
+        baselineOffset.pointee = editorBaselineOffset(
+            orientation: textContainer.layoutOrientation
+        )
+        return true
+    }
+
+    private func editorBaselineOffset(
+        orientation: NSLayoutManager.TextLayoutOrientation
+    ) -> CGFloat {
+        switch orientation {
+        case .vertical:
+            return editorLineHeight / 2
+        case .horizontal:
+            // AppKit's default baseline includes the font's top leading. Drop
+            // that visual cap-height difference before centering the glyphs.
+            let topLeading = textFont.ascender - textFont.capHeight
+            return (
+                editorLineHeight
+                    + cachedDefaultBaselineOffset
+                    - topLeading
+            ) / 2
+        @unknown default:
+            return editorLineHeight / 2
+        }
+    }
+
+    private func updateFontMetrics() {
+        cachedDefaultLineHeight = defaultLineHeight(for: textFont)
+        cachedDefaultBaselineOffset = defaultBaselineOffset(for: textFont)
+    }
+
+    private func invalidateEditorLayout() {
+        let range = NSRange(location: 0, length: textStorage?.length ?? 0)
+        invalidateLayout(forCharacterRange: range, actualCharacterRange: nil)
+        invalidateDisplay(forCharacterRange: range)
     }
 
     private func clampedRange(_ range: NSRange) -> NSRange? {

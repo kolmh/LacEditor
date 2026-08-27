@@ -4,7 +4,8 @@ struct SettingsView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 0) {
             Text("通用设置")
                 .font(.system(size: 20, weight: .semibold))
                 .padding(.bottom, 18)
@@ -12,6 +13,34 @@ struct SettingsView: View {
             Divider()
 
             Grid(alignment: .leading, horizontalSpacing: 24, verticalSpacing: 22) {
+                GridRow {
+                    settingLabel(
+                        title: "缩进方式",
+                        detail: "选择按 Tab 键插入空格或真正的 Tab 字符。"
+                    )
+                    Picker("缩进方式", selection: $appState.indentationStyle) {
+                        ForEach(IndentationStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+                }
+
+                GridRow {
+                    settingLabel(
+                        title: "Tab 宽度",
+                        detail: "控制 Tab 字符和空格缩进的显示宽度。"
+                    )
+                    Picker("Tab 宽度", selection: $appState.tabWidth) {
+                        ForEach([2, 4, 8], id: \.self) { width in
+                            Text("\(width) 个字符").tag(width)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+                }
+
                 GridRow {
                     settingLabel(
                         title: "外观",
@@ -125,8 +154,9 @@ struct SettingsView: View {
             .font(.system(size: 11))
             .foregroundStyle(.secondary)
             .padding(.top, 14)
+            }
+            .padding(28)
         }
-        .padding(28)
         .frame(width: 540, height: 570)
     }
 

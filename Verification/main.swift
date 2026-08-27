@@ -708,6 +708,10 @@ require(
     "ordered list continuation with indentation and parenthesis"
 )
 require(
+    ListContinuationService.continuation(for: "   1. 子列表第一项") == "2. ",
+    "nested ordered list continuation"
+)
+require(
     ListContinuationService.continuation(for: "  + 子项") == "+ ",
     "unordered list marker continuation"
 )
@@ -726,6 +730,22 @@ let deletedMiddleNormalization = ListContinuationService.normalizeOrderedList(
 require(
     deletedMiddleNormalization?.text == "1. 第一项\n2. 第三项\n3. 第四项",
     "ordered list renumbers after deleting a middle item"
+)
+
+let nestedList = """
+1. 一级
+2. 二级入口
+   1. 子项一
+   3. 子项三
+3. 下一个一级
+"""
+let nestedNormalization = ListContinuationService.normalizeOrderedList(
+    in: nestedList,
+    aroundUTF16Location: ("1. 一级\n2. 二级入口\n   1. 子项一\n" as NSString).length
+)
+require(
+    nestedNormalization?.text == "1. 一级\n2. 二级入口\n   1. 子项一\n   2. 子项三\n3. 下一个一级",
+    "nested ordered list renumbers only its own indentation level"
 )
 
 let insertedMiddleItem = """

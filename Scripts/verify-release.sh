@@ -51,6 +51,7 @@ swiftc \
     LacEditor/Editor/FoldService.swift \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Editor/LogicalLineIndex.swift \
+    LacEditor/Editor/FoldLayoutManager.swift \
     LacEditor/Editor/CodeLexicalScanner.swift \
     LacEditor/Editor/DelimiterMatchingService.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
@@ -68,6 +69,7 @@ swiftc \
 swiftc \
     LacEditor/Editor/ListContinuationService.swift \
     LacEditor/Services/TextCodecService.swift \
+    LacEditor/Editor/FoldLayoutManager.swift \
     LacEditor/Editor/LacTextView.swift \
     Verification/EditorInteractionVerification.swift \
     -o .build/editor-interaction-verification

@@ -78,26 +78,24 @@ struct PerformanceVerification {
         require(highlightResult.seconds < 3, "visible-range highlighting took \(highlightResult.seconds)s")
 
         let attributeStorage = NSTextStorage(string: source)
+        let attributeLayoutManager = FoldLayoutManager()
+        attributeStorage.addLayoutManager(attributeLayoutManager)
         let attributeRange = NSRange(location: visibleStart, length: 12_000)
         let attributeResult = measure {
             SyntaxHighlighter.apply(
                 tokens: highlightResult.value,
-                to: attributeStorage,
-                baseFont: NSFont.monospacedSystemFont(
-                    ofSize: 14,
-                    weight: .regular
-                ),
+                to: attributeLayoutManager,
                 range: attributeRange
             )
         }
         require(attributeResult.seconds < 3, "visible attributes took \(attributeResult.seconds)s")
         require(
-            attributeStorage.attribute(
+            attributeLayoutManager.temporaryAttribute(
                 .foregroundColor,
-                at: visibleStart,
+                atCharacterIndex: visibleStart,
                 effectiveRange: nil
             ) != nil,
-            "visible attributes were applied"
+            "visible temporary attributes were applied"
         )
 
         let layoutStorage = NSTextStorage(string: source)

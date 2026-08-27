@@ -12,6 +12,8 @@ struct EditorTextView: NSViewRepresentable {
     let sessionStore: EditorSessionStore
     let fontSize: CGFloat
     let lineSpacing: CGFloat
+    let indentationStyle: IndentationStyle
+    let tabWidth: Int
     let wordWrap: Bool
     let showsLineNumbers: Bool
     let topInset: CGFloat
@@ -55,6 +57,8 @@ struct EditorTextView: NSViewRepresentable {
 
         let textStorage = NSTextStorage()
         let layoutManager = FoldLayoutManager()
+        let editorFont = lacEditorFont(size: fontSize)
+        layoutManager.textFont = editorFont
         layoutManager.editorLineSpacing = lineSpacing
         EditorLayoutPolicy.configure(
             layoutManager,
@@ -85,9 +89,20 @@ struct EditorTextView: NSViewRepresentable {
         textView.usesFindBar = true
         textView.isIncrementalSearchingEnabled = true
         textView.textContainerInset = NSSize(width: 0, height: topInset)
-        textContainer.lineFragmentPadding = 0
+        // Leave a one-pixel safety edge so AppKit's insertion caret is not
+        // clipped when it sits at the first column.
+        textContainer.lineFragmentPadding = 1
         textView.backgroundColor = NSColor.lacEditorBackground
         textView.drawsBackground = true
+        // Establish the final font and paragraph metrics before assigning the
+        // document. Otherwise an empty document gets an extra-line fragment
+        // laid out with AppKit defaults and jumps when its first glyph arrives.
+        textView.font = editorFont
+        textView.textColor = .labelColor
+        textView.editorLineSpacing = lineSpacing
+        textView.indentationStyle = indentationStyle
+        textView.tabWidth = tabWidth
+        textView.configureTabStops()
         textView.string = document.text
         let textLength = (document.text as NSString).length
         let selectionLocation = min(document.selectionRange.location, textLength)
@@ -99,7 +114,15 @@ struct EditorTextView: NSViewRepresentable {
             )
         ))
         textView.delegate = context.coordinator
-        textView.font = editorFont(size: fontSize)
+        if let style = textView.defaultParagraphStyle,
+           let storage = textView.textStorage,
+           storage.length > 0 {
+            storage.addAttribute(
+                .paragraphStyle,
+                value: style,
+                range: NSRange(location: 0, length: storage.length)
+            )
+        }
         textView.minSize = NSSize.zero
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -124,10 +147,14 @@ struct EditorTextView: NSViewRepresentable {
             coordinator?.selectionDidChangeDuringTracking()
         }
         textView.textTransformationHandler = requestTextTransformation
+        textView.listIndentationHandler = { [weak coordinator = context.coordinator] outdent in
+            coordinator?.indentCurrentListItem(outdent: outdent) ?? false
+        }
         ruler.lineNumberProvider = { [weak coordinator = context.coordinator] location in
             coordinator?.lineNumber(at: location) ?? 1
         }
         context.coordinator.currentFontSize = fontSize
+        context.coordinator.currentTabWidth = tabWidth
         context.coordinator.currentLanguage = document.language
         context.coordinator.updatePerformanceFeatures()
         context.coordinator.lastSynchronizedRevision = document.textRevision
@@ -159,6 +186,7 @@ struct EditorTextView: NSViewRepresentable {
         textView.textTransformationHandler = requestTextTransformation
         let documentChanged = context.coordinator.document.id != document.id
         let fontChanged = context.coordinator.currentFontSize != fontSize
+        let tabWidthChanged = context.coordinator.currentTabWidth != tabWidth
         let lineSpacingChanged = context.coordinator.foldLayoutManager?
             .editorLineSpacing != lineSpacing
         let languageChanged = context.coordinator.currentLanguage != document.language
@@ -167,8 +195,33 @@ struct EditorTextView: NSViewRepresentable {
         }
         context.coordinator.document = document
         context.coordinator.currentFontSize = fontSize
+        context.coordinator.currentTabWidth = tabWidth
         context.coordinator.currentLanguage = document.language
+        context.coordinator.foldLayoutManager?.textFont = lacEditorFont(size: fontSize)
         context.coordinator.foldLayoutManager?.editorLineSpacing = lineSpacing
+        textView.editorLineSpacing = lineSpacing
+        textView.indentationStyle = indentationStyle
+        textView.tabWidth = tabWidth
+        if fontChanged {
+            textView.font = lacEditorFont(size: fontSize)
+        }
+        let shouldRefreshTextMetrics = lineSpacingChanged
+            || fontChanged
+            || tabWidthChanged
+        if shouldRefreshTextMetrics, !textView.hasMarkedText() {
+            textView.configureTabStops()
+        }
+        if shouldRefreshTextMetrics,
+           !textView.hasMarkedText(),
+           let style = textView.defaultParagraphStyle,
+           let storage = textView.textStorage,
+           storage.length > 0 {
+            storage.addAttribute(
+                .paragraphStyle,
+                value: style,
+                range: NSRange(location: 0, length: storage.length)
+            )
+        }
         context.coordinator.updatePerformanceFeatures()
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)
         context.coordinator.updateTopInset(topInset)
@@ -208,19 +261,12 @@ struct EditorTextView: NSViewRepresentable {
             wordWrap: wordWrap,
             force: lineSpacingChanged
         )
-        if fontChanged {
-            textView.font = editorFont(size: fontSize)
-        }
         if documentChanged || revisionChanged || fontChanged || languageChanged {
             context.coordinator.scheduleHighlight(delay: 0)
         }
         if documentChanged || revisionChanged || languageChanged {
             context.coordinator.scheduleDelimiterMatch(delay: 0)
         }
-    }
-
-    private func editorFont(size: CGFloat) -> NSFont {
-        NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
 }

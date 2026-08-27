@@ -229,13 +229,13 @@ enum FoldLayoutVerification {
         width: CGFloat,
         layoutManager: NSLayoutManager
     ) -> CGFloat {
+        let font = NSFont(name: "Menlo-Regular", size: 14)
+            ?? NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
+        (layoutManager as? FoldLayoutManager)?.textFont = font
         let storage = NSTextStorage(
             string: source,
             attributes: [
-                .font: NSFont.monospacedSystemFont(
-                    ofSize: 14,
-                    weight: .regular
-                )
+                .font: font
             ]
         )
         storage.addLayoutManager(layoutManager)

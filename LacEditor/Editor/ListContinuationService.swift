@@ -18,6 +18,104 @@ enum ListContinuationService {
         let replacement: String
     }
 
+    static func indentationEdit(
+        in text: NSString,
+        at location: Int,
+        indentUnit: String,
+        outdent: Bool
+    ) -> [OrderedListEdit]? {
+        let safeLocation = min(max(location, 0), text.length)
+        let lineRange = text.lineRange(for: NSRange(location: safeLocation, length: 0))
+        let raw = text.substring(with: lineRange).trimmingCharacters(in: .newlines)
+        guard let item = orderedItem(in: raw, lineStart: lineRange.location) else { return nil }
+        let prefixLength = (raw as NSString).range(of: "^[ \\t]*", options: .regularExpression).length
+        let unitLength = (indentUnit as NSString).length
+        var edits: [OrderedListEdit] = []
+        if outdent {
+            guard prefixLength > 0 else { return nil }
+            let remove = min(prefixLength, unitLength)
+            edits.append(OrderedListEdit(
+                range: NSRange(location: lineRange.location, length: remove),
+                replacement: ""
+            ))
+            let targetIndent = max(0, item.indentWidth - unitLength)
+            var expectedNumber = 1
+            var previousSiblingNumber: Int?
+            var scanRange = previousLineRange(before: lineRange, in: text)
+            while let candidateRange = scanRange {
+                let candidateRaw = text.substring(with: candidateRange)
+                    .trimmingCharacters(in: .newlines)
+                if let previous = orderedItem(in: candidateRaw, lineStart: candidateRange.location),
+                   previous.delimiter == item.delimiter {
+                    if previous.indentWidth == targetIndent {
+                        previousSiblingNumber = previous.number
+                        break
+                    }
+                    if previous.indentWidth < targetIndent { break }
+                }
+                scanRange = previousLineRange(before: candidateRange, in: text)
+            }
+            if let previousSiblingNumber {
+                expectedNumber = previousSiblingNumber + 1
+            }
+            edits.append(OrderedListEdit(
+                range: item.numberRange,
+                replacement: String(expectedNumber)
+            ))
+        } else {
+            // Replace the indentation and marker in one operation. Keeping
+            // both edits at the same location can otherwise turn `4.` into
+            // `14.` when AppKit applies the edits in an unspecified order.
+            let markerEnd = NSMaxRange(item.numberRange)
+            let markerRange = NSRange(
+                location: lineRange.location,
+                length: markerEnd - lineRange.location
+            )
+            edits.append(OrderedListEdit(
+                range: markerRange,
+                replacement: indentUnit + "1"
+            ))
+        }
+        return edits
+    }
+
+    static func normalizeNestedLists(in text: String) -> String {
+        let lines = text.components(separatedBy: "\n")
+        var counters: [Int: Int] = [:]
+        var output: [String] = []
+        for line in lines {
+            guard let match = firstMatch(
+                expression: orderedItemExpression,
+                in: line
+            ) else {
+                counters.removeAll()
+                output.append(line)
+                continue
+            }
+            let indent = match[1]
+            let width = indent.reduce(into: 0) { value, character in
+                value += character == "\t" ? 4 : 1
+            }
+            counters = counters.filter { $0.key <= width }
+            let expected = (counters[width] ?? 0) + 1
+            counters[width] = expected
+            let nsLine = line as NSString
+            let numberRange = nsLine.range(
+                of: match[2],
+                options: [],
+                range: NSRange(location: indent.utf16.count, length: nsLine.length - indent.utf16.count)
+            )
+            guard numberRange.location != NSNotFound else {
+                output.append(line)
+                continue
+            }
+            let prefix = nsLine.substring(to: numberRange.location)
+            let suffix = nsLine.substring(from: NSMaxRange(numberRange))
+            output.append(prefix + String(expected) + suffix)
+        }
+        return output.joined(separator: "\n")
+    }
+
     struct OrderedListNormalization {
         let text: String
         let edits: [OrderedListEdit]

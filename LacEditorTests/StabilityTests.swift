@@ -3,6 +3,195 @@ import XCTest
 @testable import LacEditor
 
 final class StabilityTests: XCTestCase {
+    @MainActor
+    func testEditorLayoutKeepsMixedScriptLinesAndTrailingLineStable() throws {
+        let font = try XCTUnwrap(NSFont(name: "Menlo-Regular", size: 14))
+        let text = "abc中文\n中文abc\n# 标题 123\n"
+        let storage = NSTextStorage(
+            string: text,
+            attributes: [.font: font]
+        )
+        let layoutManager = FoldLayoutManager()
+        layoutManager.textFont = font
+        layoutManager.editorLineSpacing = 6
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(
+            containerSize: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude)
+        )
+        layoutManager.addTextContainer(container)
+        layoutManager.ensureLayout(for: container)
+
+        var fragmentHeights: [CGFloat] = []
+        var usedHeights: [CGFloat] = []
+        var baselineLocations: [CGFloat] = []
+        let glyphRange = layoutManager.glyphRange(
+            for: container
+        )
+        layoutManager.enumerateLineFragments(forGlyphRange: glyphRange) {
+            fragmentRect,
+            usedRect,
+            _,
+            glyphRange,
+            _ in
+            fragmentHeights.append(fragmentRect.height)
+            usedHeights.append(usedRect.height)
+            if glyphRange.length > 0 {
+                baselineLocations.append(
+                    layoutManager.location(forGlyphAt: glyphRange.location).y
+                )
+            }
+        }
+
+        XCTAssertGreaterThanOrEqual(fragmentHeights.count, 3)
+        for height in fragmentHeights {
+            XCTAssertEqual(height, layoutManager.editorLineHeight, accuracy: 0.001)
+        }
+        for height in usedHeights {
+            XCTAssertEqual(height, layoutManager.editorLineHeight, accuracy: 0.001)
+        }
+        for baseline in baselineLocations.dropFirst() {
+            XCTAssertEqual(baseline, baselineLocations[0], accuracy: 0.001)
+        }
+        XCTAssertEqual(
+            layoutManager.extraLineFragmentRect.height,
+            layoutManager.editorLineHeight,
+            accuracy: 0.001
+        )
+    }
+
+    @MainActor
+    func testSyntaxHighlightUsesTemporaryColorsWithoutChangingTextMetrics() throws {
+        let font = try XCTUnwrap(NSFont(name: "Menlo-Regular", size: 14))
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.defaultTabInterval = 32
+        let storage = NSTextStorage(
+            string: "# 标题\n普通正文",
+            attributes: [
+                .font: font,
+                .foregroundColor: NSColor.labelColor,
+                .paragraphStyle: paragraph
+            ]
+        )
+        let layoutManager = FoldLayoutManager()
+        storage.addLayoutManager(layoutManager)
+        layoutManager.addTextContainer(NSTextContainer(
+            containerSize: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude)
+        ))
+        let fullRange = NSRange(location: 0, length: storage.length)
+        let originalAttributes = storage.attributes(at: 0, effectiveRange: nil)
+
+        SyntaxHighlighter.apply(
+            tokens: [.init(range: NSRange(location: 0, length: 4), kind: .heading)],
+            to: layoutManager,
+            range: fullRange
+        )
+
+        XCTAssertEqual(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, font)
+        XCTAssertEqual(
+            storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle,
+            paragraph
+        )
+        XCTAssertEqual(
+            storage.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            originalAttributes[.foregroundColor] as? NSColor
+        )
+        XCTAssertNotNil(layoutManager.temporaryAttribute(
+            .foregroundColor,
+            atCharacterIndex: 0,
+            effectiveRange: nil
+        ))
+        XCTAssertNil(layoutManager.temporaryAttribute(
+            .foregroundColor,
+            atCharacterIndex: 5,
+            effectiveRange: nil
+        ))
+
+        SyntaxHighlighter.apply(tokens: [], to: layoutManager, range: fullRange)
+        XCTAssertNil(layoutManager.temporaryAttribute(
+            .foregroundColor,
+            atCharacterIndex: 0,
+            effectiveRange: nil
+        ))
+        XCTAssertEqual(storage.attribute(.font, at: 0, effectiveRange: nil) as? NSFont, font)
+    }
+
+    func testMarkdownHeadingHighlightNeverLeaksIntoFollowingLines() {
+        let markdown = "# 一级标题\n普通正文\n## 二级标题\n结尾"
+        let nsMarkdown = markdown as NSString
+        let tokens = SyntaxHighlighter.tokens(
+            in: markdown,
+            language: .markdown
+        )
+        let headings = tokens.filter { $0.kind == .heading }
+
+        XCTAssertEqual(headings.count, 2)
+        for heading in headings {
+            let value = nsMarkdown.substring(with: heading.range)
+            XCTAssertTrue(value.hasPrefix("#"))
+            XCTAssertFalse(value.contains("\n"))
+        }
+        let ordinaryRange = nsMarkdown.range(of: "普通正文")
+        XCTAssertFalse(tokens.contains {
+            NSIntersectionRange($0.range, ordinaryRange).length > 0
+        })
+    }
+
+    @MainActor
+    func testMarkedChineseTextCannotReplaceRequestedFontOrMoveLine() throws {
+        let font = try XCTUnwrap(NSFont(name: "Menlo-Regular", size: 14))
+        let storage = NSTextStorage()
+        let layoutManager = FoldLayoutManager()
+        layoutManager.textFont = font
+        layoutManager.editorLineSpacing = 6
+        storage.addLayoutManager(layoutManager)
+        let container = NSTextContainer(
+            containerSize: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude)
+        )
+        layoutManager.addTextContainer(container)
+        let textView = LacTextView(
+            frame: NSRect(x: 0, y: 0, width: 600, height: 200),
+            textContainer: container
+        )
+        textView.font = font
+        textView.editorLineSpacing = 6
+        textView.configureTabStops()
+        textView.string = "abc"
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        layoutManager.ensureLayout(for: container)
+        let initialRect = layoutManager.lineFragmentRect(
+            forGlyphAt: 0,
+            effectiveRange: nil
+        )
+
+        textView.setMarkedText(
+            "中文",
+            selectedRange: NSRange(location: 2, length: 0),
+            replacementRange: NSRange(location: NSNotFound, length: 0)
+        )
+        layoutManager.ensureLayout(for: container)
+        let composingRect = layoutManager.lineFragmentRect(
+            forGlyphAt: 0,
+            effectiveRange: nil
+        )
+
+        XCTAssertTrue(textView.hasMarkedText())
+        XCTAssertEqual(textView.font, font)
+        XCTAssertEqual(composingRect.height, initialRect.height, accuracy: 0.001)
+        XCTAssertEqual(composingRect.minY, initialRect.minY, accuracy: 0.001)
+
+        textView.unmarkText()
+        layoutManager.ensureLayout(for: container)
+        let committedRect = layoutManager.lineFragmentRect(
+            forGlyphAt: 0,
+            effectiveRange: nil
+        )
+        XCTAssertFalse(textView.hasMarkedText())
+        XCTAssertEqual(textView.font, font)
+        XCTAssertEqual(textView.typingAttributes[.font] as? NSFont, font)
+        XCTAssertEqual(committedRect.height, initialRect.height, accuracy: 0.001)
+        XCTAssertEqual(committedRect.minY, initialRect.minY, accuracy: 0.001)
+    }
+
     func testJSONFormattingPreservesObjectOrderAndLexemes() throws {
         let source = #"{"z":1,"a":2,"z":3,"nested":{"b":true,"a":null},"number":1.2300e+04,"escaped":"a\\/b\\u4F60"}"#
         let pretty = try JSONFormatter.format(source, pretty: true)

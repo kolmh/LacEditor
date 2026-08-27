@@ -61,7 +61,7 @@ enum SyntaxHighlighter {
     static func apply(
         to storage: NSTextStorage,
         language: EditorLanguage,
-        baseFont: NSFont,
+        baseFont _: NSFont,
         range requestedRange: NSRange? = nil
     ) {
         let fullRange = NSRange(location: 0, length: storage.length)
@@ -70,45 +70,58 @@ enum SyntaxHighlighter {
         } ?? fullRange
         guard highlightRange.length > 0 else { return }
 
-        apply(
-            tokens: tokens(
-                in: storage.string,
-                language: language,
-                range: highlightRange
-            ),
-            to: storage,
-            baseFont: baseFont,
+        let tokens = tokens(
+            in: storage.string,
+            language: language,
             range: highlightRange
         )
+        for layoutManager in storage.layoutManagers {
+            apply(tokens: tokens, to: layoutManager, range: highlightRange)
+        }
     }
 
     static func apply(
         tokens: [Token],
-        to storage: NSTextStorage,
-        baseFont: NSFont,
+        to layoutManager: NSLayoutManager?,
         range requestedRange: NSRange
     ) {
+        guard let layoutManager,
+              let storage = layoutManager.textStorage else { return }
         let highlightRange = NSIntersectionRange(
             requestedRange,
             NSRange(location: 0, length: storage.length)
         )
         guard highlightRange.length > 0 else { return }
 
-        storage.beginEditing()
-        storage.setAttributes([
-            .font: baseFont,
-            .foregroundColor: NSColor.labelColor
-        ], range: highlightRange)
-
-        for token in tokens {
-            let tokenRange = NSIntersectionRange(token.range, highlightRange)
-            guard tokenRange.length > 0 else { continue }
-            storage.addAttributes(
-                attributes(for: token.kind, baseFont: baseFont),
-                range: tokenRange
+        // Syntax is presentation-only. Temporary layout attributes cannot
+        // alter the document, typing attributes, paragraph metrics, undo stack,
+        // or IME marked text. Removing first also clears stale colors when a
+        // token disappears after an edit.
+        let updates = {
+            layoutManager.removeTemporaryAttribute(
+                .foregroundColor,
+                forCharacterRange: highlightRange
             )
+
+            for token in tokens {
+                let tokenRange = NSIntersectionRange(token.range, highlightRange)
+                guard tokenRange.length > 0 else { continue }
+                layoutManager.addTemporaryAttribute(
+                    .foregroundColor,
+                    value: color(for: token.kind),
+                    forCharacterRange: tokenRange
+                )
+            }
         }
-        storage.endEditing()
+        if let editorLayoutManager = layoutManager as? FoldLayoutManager {
+            editorLayoutManager.updateTemporaryAttributes(
+                in: highlightRange,
+                updates
+            )
+        } else {
+            updates()
+            layoutManager.invalidateDisplay(forCharacterRange: highlightRange)
+        }
     }
 
     static func tokens(
@@ -452,39 +465,27 @@ enum SyntaxHighlighter {
         return nil
     }
 
-    private static func attributes(
-        for kind: TokenKind,
-        baseFont: NSFont
-    ) -> [NSAttributedString.Key: Any] {
+    private static func color(for kind: TokenKind) -> NSColor {
         let color: NSColor
-        let font: NSFont
         switch kind {
         case .keyword, .markup, .selector:
             color = Palette.keyword
-            font = baseFont
         case .string:
             color = Palette.string
-            font = baseFont
         case .number:
             color = Palette.number
-            font = baseFont
         case .literal, .function, .typeName, .attribute, .property, .variable:
             color = Palette.symbol
-            font = baseFont
         case .punctuation:
             color = NSColor.tertiaryLabelColor
-            font = baseFont
         case .comment:
             color = NSColor.secondaryLabelColor
-            font = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
         case .heading, .strong:
             color = kind == .heading ? Palette.keyword : Palette.symbol
-            font = NSFontManager.shared.convert(baseFont, toHaveTrait: .boldFontMask)
         case .emphasis:
             color = Palette.symbol
-            font = NSFontManager.shared.convert(baseFont, toHaveTrait: .italicFontMask)
         }
-        return [.foregroundColor: color, .font: font]
+        return color
     }
 
     private enum Palette {

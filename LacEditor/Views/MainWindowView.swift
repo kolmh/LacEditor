@@ -100,6 +100,8 @@ struct MainWindowView: View {
                     sessionStore: editorSessions,
                     fontSize: appState.editorFontSize,
                     lineSpacing: appState.editorLineSpacing,
+                    indentationStyle: appState.indentationStyle,
+                    tabWidth: appState.tabWidth,
                     wordWrap: selectedDocument.effectiveWordWrap(
                         globalDefault: appState.isWordWrapEnabled
                     ),
@@ -139,6 +141,8 @@ private struct DocumentEditorPane: View {
     let sessionStore: EditorSessionStore
     let fontSize: CGFloat
     let lineSpacing: CGFloat
+    let indentationStyle: IndentationStyle
+    let tabWidth: Int
     let wordWrap: Bool
     let showsLineNumbers: Bool
     let editorTopInset: CGFloat
@@ -180,6 +184,8 @@ private struct DocumentEditorPane: View {
             sessionStore: sessionStore,
             fontSize: fontSize,
             lineSpacing: lineSpacing,
+            indentationStyle: indentationStyle,
+            tabWidth: tabWidth,
             wordWrap: wordWrap,
             showsLineNumbers: showsLineNumbers,
             topInset: editorTopInset,

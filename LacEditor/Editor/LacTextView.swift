@@ -1,5 +1,28 @@
 import AppKit
 
+enum IndentationStyle: String, CaseIterable, Identifiable {
+    case spaces
+    case tabs
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .spaces: "使用空格"
+        case .tabs: "使用 Tab 字符"
+        }
+    }
+}
+
+func lacEditorFont(size: CGFloat) -> NSFont {
+    // Menlo supplies stable fixed-width metrics for Latin text. AppKit uses
+    // the system fallback (PingFang on Chinese systems) for glyphs Menlo does
+    // not contain. FoldLayoutManager deliberately keeps line metrics based on
+    // this requested font rather than whichever fallback draws the first glyph.
+    NSFont(name: "Menlo-Regular", size: size)
+        ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+}
+
 extension NSColor {
     static let lacEditorBackground = NSColor(name: nil) { appearance in
         let match = appearance.bestMatch(from: [.darkAqua, .aqua])
@@ -40,10 +63,54 @@ extension NSColor {
 }
 
 final class LacTextView: NSTextView {
+    var indentationStyle: IndentationStyle = .spaces
+    var tabWidth: Int = 4
+    var editorLineSpacing: CGFloat = FoldLayoutManager.defaultLineSpacing
+
+    var editorLineHeight: CGFloat {
+        (layoutManager as? FoldLayoutManager)?.editorLineHeight
+            ?? ((font?.pointSize ?? 14) + editorLineSpacing)
+    }
+
+
     var currentLineColor: NSColor = .lacCurrentLineBackground
     var selectionTrackingHandler: (() -> Void)?
     var requestsFirstResponderWhenAttached = false
     var textTransformationHandler: ((TextTransformationOperation) -> Void)?
+    var listIndentationHandler: ((Bool) -> Bool)?
+
+    /// NSTextView normally reports the fallback font used by the first glyph.
+    /// When a document starts with Chinese, that can be PingFang even though
+    /// the requested editor font is Menlo. Always expose the requested font so
+    /// typing and tab metrics cannot change with the first character.
+    override var font: NSFont? {
+        get {
+            (layoutManager as? FoldLayoutManager)?.textFont ?? super.font
+        }
+        set {
+            guard let newValue else { return }
+            (layoutManager as? FoldLayoutManager)?.textFont = newValue
+            super.font = newValue
+            typingAttributes[.font] = newValue
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        // Handle the physical Tab key before AppKit applies its paragraph
+        // indentation command. This is especially important at column zero.
+        if event.keyCode == 48, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty {
+            if listIndentationHandler?(false) == true { return }
+            insertTab(nil)
+            return
+        }
+        if event.keyCode == 48, event.modifierFlags.contains(.shift),
+           event.modifierFlags.intersection([.command, .option, .control]).isEmpty {
+            if listIndentationHandler?(true) == true { return }
+            insertBacktab(nil)
+            return
+        }
+        super.keyDown(with: event)
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -99,7 +166,7 @@ final class LacTextView: NSTextView {
                     x: 0,
                     y: textContainerInset.height,
                     width: bounds.width,
-                    height: defaultParagraphStyle?.maximumLineHeight ?? 18
+                    height: editorLineHeight
                 )
             }
             lineRects.append(lineRect)
@@ -213,7 +280,78 @@ final class LacTextView: NSTextView {
     }
 
     override func insertTab(_ sender: Any?) {
-        insertText("    ", replacementRange: selectedRange())
+        let indentation = indentationStyle == .tabs
+            ? "\t"
+            : String(repeating: " ", count: tabWidth)
+        let range = selectedRange()
+        // Replace directly instead of routing through AppKit's tab command,
+        // which may briefly apply its own paragraph indentation at column 0.
+        replaceCharacters(in: range, with: indentation)
+        setSelectedRange(NSRange(
+            location: range.location + (indentation as NSString).length,
+            length: 0
+        ))
+    }
+
+    override func doCommand(by selector: Selector) {
+        // NSTextView may dispatch Tab through the command chain as well as
+        // insertTab(_:). Handle it exactly once to avoid the visible bounce.
+        if selector == #selector(insertTab(_:)) {
+            if listIndentationHandler?(false) == true { return }
+            insertTab(nil)
+            return
+        }
+        if selector == #selector(insertBacktab(_:)) {
+            if listIndentationHandler?(true) == true { return }
+            insertBacktab(nil)
+            return
+        }
+        super.doCommand(by: selector)
+    }
+
+    override func insertBacktab(_ sender: Any?) {
+        let range = selectedRange()
+        guard range.length == 0, range.location > 0,
+              let text = textStorage?.string as NSString? else {
+            super.insertBacktab(sender)
+            return
+        }
+        let line = text.lineRange(for: NSRange(location: range.location, length: 0))
+        let beforeCaret = NSRange(location: line.location, length: range.location - line.location)
+        let prefix = text.substring(with: beforeCaret)
+        let removeCount: Int
+        if prefix.hasSuffix("\t") {
+            removeCount = 1
+        } else {
+            removeCount = min(tabWidth, prefix.reversed().prefix { $0 == " " }.count)
+        }
+        guard removeCount > 0 else { return }
+        replaceCharacters(in: NSRange(
+            location: range.location - removeCount,
+            length: removeCount
+        ), with: "")
+        setSelectedRange(NSRange(location: range.location - removeCount, length: 0))
+    }
+
+    func configureTabStops() {
+        let paragraphStyle = (typingAttributes[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy()
+            as? NSMutableParagraphStyle ?? NSMutableParagraphStyle()
+        let displayFont = self.font ?? lacEditorFont(size: 14)
+        let width = displayFont.maximumAdvancement.width * CGFloat(tabWidth)
+        paragraphStyle.defaultTabInterval = width
+        paragraphStyle.tabStops = []
+        // The layout manager is the sole owner of line height. Paragraph-level
+        // min/max heights are intentionally cleared because input methods can
+        // replace the first run's font during composition.
+        paragraphStyle.minimumLineHeight = 0
+        paragraphStyle.maximumLineHeight = 0
+        paragraphStyle.lineHeightMultiple = 1
+        paragraphStyle.lineSpacing = 0
+        typingAttributes[.font] = displayFont
+        typingAttributes[.foregroundColor] = NSColor.labelColor
+        typingAttributes[.paragraphStyle] = paragraphStyle
+        defaultParagraphStyle = paragraphStyle
+        enclosingScrollView?.lineScroll = editorLineHeight
     }
 
     override func insertNewline(_ sender: Any?) {
@@ -231,7 +369,7 @@ final class LacTextView: NSTextView {
         let trimmed = linePrefix.trimmingCharacters(in: .whitespaces)
         let continuation: String
         if trimmed.hasSuffix("{") || trimmed.hasSuffix("[") {
-            continuation = "    "
+            continuation = indentationUnit
         } else {
             continuation = ListContinuationService.continuation(for: linePrefix) ?? ""
         }
@@ -245,5 +383,9 @@ final class LacTextView: NSTextView {
             return
         }
         insertText("\n\(indentation)\(continuation)", replacementRange: selection)
+    }
+
+    private var indentationUnit: String {
+        indentationStyle == .tabs ? "\t" : String(repeating: " ", count: tabWidth)
     }
 }

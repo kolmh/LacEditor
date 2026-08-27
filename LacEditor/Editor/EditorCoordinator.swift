@@ -14,6 +14,7 @@ extension EditorTextView {
         private var isApplyingAutomatedEdit = false
         private var isRestoringOffscreenEdit = false
         var currentFontSize: CGFloat = 14
+        var currentTabWidth: Int = 4
         var currentLanguage: EditorLanguage
         var lastSynchronizedRevision: UInt
         private var wordWrap = true
@@ -90,6 +91,59 @@ extension EditorTextView {
         }
 
         var isSessionActive: Bool { isActive }
+
+        func indentCurrentListItem(outdent: Bool) -> Bool {
+            guard currentLanguage == .markdown,
+                  let textView,
+                  let storage = textView.textStorage,
+                  let edits = ListContinuationService.indentationEdit(
+                    in: storage.mutableString,
+                    at: textView.selectedRange().location,
+                    indentUnit: textView.indentationStyle == .tabs
+                        ? "\t"
+                        : String(repeating: " ", count: textView.tabWidth),
+                    outdent: outdent
+                  ) else { return false }
+            isApplyingAutomatedEdit = true
+            for edit in edits.sorted(by: { $0.range.location > $1.range.location }) {
+                storage.replaceCharacters(in: edit.range, with: edit.replacement)
+            }
+            let normalized = ListContinuationService.normalizeNestedLists(in: storage.string)
+            if normalized != storage.string {
+                storage.replaceCharacters(
+                    in: NSRange(location: 0, length: storage.length),
+                    with: normalized
+                )
+            }
+            // Indenting removes an item from its parent sequence. Normalize
+            // the next parent item immediately so its number does not remain
+            // stale until a later edit.
+            if !outdent {
+                let currentLine = storage.mutableString.lineRange(
+                    for: NSRange(location: min(textView.selectedRange().location, storage.length), length: 0)
+                )
+                let nextLocation = NSMaxRange(currentLine)
+                if nextLocation < storage.length,
+                   let normalization = ListContinuationService.normalizeOrderedList(
+                    in: storage.string,
+                    aroundUTF16Location: nextLocation
+                   ) {
+                    for edit in normalization.edits.sorted(by: { $0.range.location > $1.range.location }) {
+                        storage.replaceCharacters(in: edit.range, with: edit.replacement)
+                    }
+                }
+            }
+            isApplyingAutomatedEdit = false
+            textView.setSelectedRange(NSRange(
+                location: max(0, min(
+                    storage.length,
+                    textView.selectedRange().location
+                        + edits.reduce(0) { $0 + ($1.replacement as NSString).length - $1.range.length }
+                )),
+                length: 0
+            ))
+            return true
+        }
 
         var estimatedMemoryCost: Int {
             let utf16Bytes = (textView?.textStorage?.length ?? document.text.utf16.count) * 2
@@ -1334,11 +1388,7 @@ extension EditorTextView {
             )
             SyntaxHighlighter.apply(
                 tokens: tokens,
-                to: storage,
-                baseFont: NSFont.monospacedSystemFont(
-                    ofSize: fontSize,
-                    weight: .regular
-                ),
+                to: textView.layoutManager,
                 range: range
             )
             os_signpost(
@@ -1382,18 +1432,16 @@ extension EditorTextView {
         }
 
         private func clearSyntaxAttributesInVisibleRange() {
-            guard let storage = textView?.textStorage, storage.length > 0 else { return }
+            guard let layoutManager = textView?.layoutManager,
+                  let storage = textView?.textStorage,
+                  storage.length > 0 else { return }
             let range = storage.length > 500_000
                 ? visibleHighlightRange() ?? NSRange(location: 0, length: 0)
                 : NSRange(location: 0, length: storage.length)
             guard range.length > 0 else { return }
             SyntaxHighlighter.apply(
                 tokens: [],
-                to: storage,
-                baseFont: NSFont.monospacedSystemFont(
-                    ofSize: currentFontSize,
-                    weight: .regular
-                ),
+                to: layoutManager,
                 range: range
             )
         }

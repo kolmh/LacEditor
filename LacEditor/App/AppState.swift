@@ -178,6 +178,14 @@ final class AppState: ObservableObject {
         get { preferences.editorLineSpacing }
         set { preferences.editorLineSpacing = newValue }
     }
+    var indentationStyle: IndentationStyle {
+        get { preferences.indentationStyle }
+        set { preferences.indentationStyle = newValue }
+    }
+    var tabWidth: Int {
+        get { preferences.tabWidth }
+        set { preferences.tabWidth = newValue }
+    }
     var isLineNumbersVisible: Bool {
         get { preferences.lineNumbersVisible }
         set { preferences.lineNumbersVisible = newValue }
