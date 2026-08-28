@@ -3,6 +3,85 @@ import XCTest
 @testable import LacEditor
 
 final class StabilityTests: XCTestCase {
+    func testDirtyRangeAccumulatorTranslatesEditsInUTF16Coordinates() {
+        let id = UUID()
+        var accumulator = DirtyRangeAccumulator()
+        accumulator.invalidate(NSRange(location: 10, length: 5))
+        accumulator.append(DocumentEditDelta(
+            documentID: id,
+            revision: 1,
+            editedRange: NSRange(location: 20, length: 0),
+            replacementLength: 3,
+            changeInLength: 3,
+            changedLineRange: nil
+        ))
+        XCTAssertEqual(
+            accumulator.ranges,
+            [NSRange(location: 10, length: 5), NSRange(location: 20, length: 3)]
+        )
+
+        accumulator.append(DocumentEditDelta(
+            documentID: id,
+            revision: 2,
+            editedRange: NSRange(location: 12, length: 2),
+            replacementLength: 0,
+            changeInLength: -2,
+            changedLineRange: nil
+        ))
+        XCTAssertEqual(
+            accumulator.ranges,
+            [NSRange(location: 10, length: 5), NSRange(location: 18, length: 3)]
+        )
+    }
+
+    func testDirtyRangeAccumulatorMergesAdjacentAndZeroLengthEdits() {
+        var accumulator = DirtyRangeAccumulator()
+        accumulator.invalidate(NSRange(location: 4, length: 2))
+        accumulator.append(DocumentEditDelta(
+            documentID: UUID(),
+            revision: 1,
+            editedRange: NSRange(location: 6, length: 0),
+            replacementLength: 0,
+            changeInLength: 0,
+            changedLineRange: nil
+        ))
+        XCTAssertEqual(accumulator.ranges, [NSRange(location: 4, length: 2)])
+
+        accumulator.append(DocumentEditDelta(
+            documentID: UUID(),
+            revision: 2,
+            editedRange: NSRange(location: 5, length: 0),
+            replacementLength: 2,
+            changeInLength: 2,
+            changedLineRange: nil
+        ))
+        XCTAssertEqual(accumulator.ranges, [NSRange(location: 4, length: 3)])
+    }
+
+    func testDirtyRangeAccumulatorUsesUTF16OffsetsForEmojiAndChineseText() {
+        let text = "中文😀后续"
+        let nsText = text as NSString
+        XCTAssertEqual(nsText.length, 6)
+        var accumulator = DirtyRangeAccumulator()
+        accumulator.append(DocumentEditDelta(
+            documentID: UUID(),
+            revision: 1,
+            editedRange: NSRange(location: 2, length: 2),
+            replacementLength: 1,
+            changeInLength: -1,
+            changedLineRange: nil
+        ))
+        accumulator.append(DocumentEditDelta(
+            documentID: UUID(),
+            revision: 2,
+            editedRange: NSRange(location: 3, length: 0),
+            replacementLength: 2,
+            changeInLength: 2,
+            changedLineRange: nil
+        ))
+        XCTAssertEqual(accumulator.unionRange, NSRange(location: 2, length: 3))
+    }
+
     @MainActor
     func testEditorLayoutKeepsMixedScriptLinesAndTrailingLineStable() throws {
         let font = try XCTUnwrap(NSFont(name: "Menlo-Regular", size: 14))
@@ -492,6 +571,219 @@ final class StabilityTests: XCTestCase {
             )
         }
     }
+
+#if canImport(SwiftTreeSitter) && canImport(TreeSitterJavaScript)
+    func testTreeSitterJavaScriptUsesUTF16RangesAndIncrementalEdits() {
+        let documentID = UUID()
+        let source = "const 中文 = \"😀\"; // 注释\nconst value = /[()]/;"
+        let fullRange = NSRange(location: 0, length: (source as NSString).length)
+        let first = SyntaxHighlighter.tokens(
+            in: source,
+            language: .javascript,
+            range: fullRange,
+            revision: 1,
+            documentID: documentID
+        )
+        let comments = first.filter { $0.kind == .comment }
+        let tokenDescription = first.map { "\($0.kind):\($0.range)" }.joined(separator: ",")
+        XCTAssertEqual(comments.count, 1, "tokens=\(tokenDescription)")
+        guard let comment = comments.first else { return }
+        XCTAssertEqual((source as NSString).substring(with: comment.range), "// 注释")
+        let strings = first.filter { $0.kind == .string }
+        XCTAssertTrue(strings.contains {
+            (source as NSString).substring(with: $0.range) == "\"😀\""
+        })
+
+        let oldValueRange = (source as NSString).range(of: "value")
+        let updated = (source as NSString).replacingCharacters(
+            in: oldValueRange,
+            with: "nextValue"
+        )
+        let edit = DocumentEditDelta(
+            documentID: documentID,
+            revision: 2,
+            editedRange: oldValueRange,
+            replacementLength: ("nextValue" as NSString).length,
+            changeInLength: ("nextValue" as NSString).length - oldValueRange.length,
+            changedLineRange: nil
+        )
+        let second = SyntaxHighlighter.tokens(
+            in: updated,
+            language: .javascript,
+            range: NSRange(location: 0, length: (updated as NSString).length),
+            revision: 2,
+            documentID: documentID,
+            edit: edit
+        )
+        XCTAssertEqual(
+            second.filter { $0.kind == .comment }.map {
+                (updated as NSString).substring(with: $0.range)
+            },
+            ["// 注释"]
+        )
+        XCTAssertTrue(second.contains {
+            $0.kind == .variable
+                && (updated as NSString).substring(with: $0.range) == "nextValue"
+        })
+    }
+
+#if canImport(TreeSitterTypeScript)
+    func testTreeSitterTypeScriptHandlesTypesAndUnicodeComments() {
+        let source = "interface 用户 { value: string }\nconst value: number = 1; // 注释"
+        let tokens = SyntaxHighlighter.tokens(
+            in: source,
+            language: .typescript,
+            range: NSRange(location: 0, length: (source as NSString).length),
+            revision: 1,
+            documentID: UUID()
+        )
+        let comments = tokens.filter { $0.kind == .comment }
+        XCTAssertEqual(comments.count, 1)
+        XCTAssertEqual((source as NSString).substring(with: comments[0].range), "// 注释")
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .variable
+                && (source as NSString).substring(with: $0.range) == "用户"
+        })
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .typeName
+                && (source as NSString).substring(with: $0.range) == "string"
+        })
+    }
+#endif
+#if canImport(TreeSitterPython)
+    func testTreeSitterPythonHandlesIndentationStringsAndUnicodeComments() {
+        let documentID = UUID()
+        let source = "def 处理(值: str):\n    return \"😀\" + 值  # 注释"
+        let tokens = SyntaxHighlighter.tokens(
+            in: source,
+            language: .python,
+            range: NSRange(location: 0, length: (source as NSString).length),
+            revision: 1,
+            documentID: documentID
+        )
+        let comments = tokens.filter { $0.kind == .comment }
+        XCTAssertEqual(comments.count, 1)
+        XCTAssertEqual((source as NSString).substring(with: comments[0].range), "# 注释")
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .string
+                && (source as NSString).substring(with: $0.range) == "\"😀\""
+        })
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .variable
+                && (source as NSString).substring(with: $0.range) == "处理"
+        })
+
+        let oldRange = (source as NSString).range(of: "值")
+        let replacementLength = ("输入" as NSString).length
+        let updated = (source as NSString).replacingCharacters(
+            in: oldRange,
+            with: "输入"
+        )
+        let edit = DocumentEditDelta(
+            documentID: documentID,
+            revision: 2,
+            editedRange: oldRange,
+            replacementLength: replacementLength,
+            changeInLength: replacementLength - oldRange.length,
+            changedLineRange: nil
+        )
+        let incrementallyUpdated = SyntaxHighlighter.tokens(
+            in: updated,
+            language: .python,
+            range: NSRange(location: 0, length: (updated as NSString).length),
+            revision: 2,
+            documentID: documentID,
+            edit: edit
+        )
+        XCTAssertTrue(incrementallyUpdated.contains {
+            $0.kind == .variable
+                && (updated as NSString).substring(with: $0.range) == "输入"
+        })
+    }
+#endif
+#if canImport(TreeSitterCSS)
+    func testTreeSitterCSSHandlesSelectorsPropertiesAndComments() {
+        let source = ".button:hover { color: #ff00aa; margin: 12px; } /* 注释 */"
+        let tokens = SyntaxHighlighter.tokens(
+            in: source,
+            language: .css,
+            range: NSRange(location: 0, length: (source as NSString).length),
+            revision: 1,
+            documentID: UUID()
+        )
+        guard let comment = tokens.first(where: { $0.kind == .comment }) else {
+            XCTFail("missing CSS comment token")
+            return
+        }
+        XCTAssertEqual((source as NSString).substring(with: comment.range), "/* 注释 */")
+        let cssTokenDescription = tokens.map {
+            "\($0.kind):\((source as NSString).substring(with: $0.range))"
+        }.joined(separator: ",")
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .property
+                && (source as NSString).substring(with: $0.range) == "color"
+        }, cssTokenDescription)
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .number
+                && (source as NSString).substring(with: $0.range) == "12px"
+        }, cssTokenDescription)
+    }
+#endif
+#if canImport(TreeSitterHTML)
+    func testTreeSitterHTMLHandlesTagsAttributesCommentsAndUnicode() {
+        let source = "<div class=\"box\">你好 <span data-x='1'>world</span><!-- 注释 --></div>"
+        let tokens = SyntaxHighlighter.tokens(
+            in: source,
+            language: .html,
+            range: NSRange(location: 0, length: (source as NSString).length),
+            revision: 1,
+            documentID: UUID()
+        )
+        guard let comment = tokens.first(where: { $0.kind == .comment }) else {
+            XCTFail("missing HTML comment token")
+            return
+        }
+        XCTAssertEqual((source as NSString).substring(with: comment.range), "<!-- 注释 -->")
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .heading
+                && (source as NSString).substring(with: $0.range) == "div"
+        })
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .attribute
+                && (source as NSString).substring(with: $0.range) == "class"
+        })
+        XCTAssertTrue(tokens.contains {
+            $0.kind == .string
+                && (source as NSString).substring(with: $0.range) == "\"box\""
+        })
+    }
+#endif
+#endif
+#if canImport(TreeSitterSwift) && canImport(TreeSitterBash) && canImport(TreeSitterYAML) && canImport(TreeSitterCPP) && canImport(TreeSitterSQL)
+    func testTreeSitterGenericLanguagesHandleCommentsStringsAndUnicode() {
+        let cases: [(String, EditorLanguage, String)] = [
+            ("func 处理() { let value = 1; print(\"😀\") } // 注释", .swift, "// 注释"),
+            ("function run() { echo \"😀\"; } # 注释", .shell, "# 注释"),
+            ("标题: 你好\nitems:\n  - value: true # 注释", .yaml, "# 注释"),
+            ("int main() { return 1; } // 注释", .cFamily, "// 注释"),
+            ("SELECT name FROM users WHERE id = 1; -- 注释", .sql, "-- 注释")
+        ]
+        for (source, language, commentText) in cases {
+            let tokens = SyntaxHighlighter.tokens(
+                in: source,
+                language: language,
+                range: NSRange(location: 0, length: (source as NSString).length),
+                revision: 1,
+                documentID: UUID()
+            )
+            XCTAssertTrue(tokens.contains {
+                $0.kind == .comment
+                    && (source as NSString).substring(with: $0.range) == commentText
+            }, "missing comment for \(language.rawValue)")
+            XCTAssertFalse(tokens.isEmpty, "missing syntax tokens for \(language.rawValue)")
+        }
+    }
+#endif
 
 
     @MainActor

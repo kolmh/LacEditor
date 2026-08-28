@@ -146,6 +146,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
             hasPendingLiveEdits = false
             pendingLiveTextIsEmpty = nil
             textRevision &+= 1
+            textSnapshotCache = nil
             scheduleMetricsRefresh()
         }
     }
@@ -164,6 +165,7 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     @Published var ioState: DocumentIOState = .idle
     @Published private(set) var wordCount: Int
     private(set) var textRevision: UInt = 0
+    private var textSnapshotCache: DocumentTextSnapshot?
     var scrollPositionRatio: CGFloat = 0
     var foldedRange: NSRange?
     private(set) var fileIdentity: DocumentFileIdentity?
@@ -393,6 +395,24 @@ final class EditorDocument: ObservableObject, Identifiable, @unchecked Sendable 
     func synchronizedText() -> String {
         synchronizeLiveText()
         return text
+    }
+
+    /// Returns one immutable snapshot for the current revision. Swift's
+    /// copy-on-write String keeps background consumers on shared storage until
+    /// a mutation occurs, while the revision prevents stale results.
+    func synchronizedSnapshot() -> DocumentTextSnapshot {
+        synchronizeLiveText()
+        if let cached = textSnapshotCache,
+           cached.revision == textRevision {
+            return cached
+        }
+        let snapshot = DocumentTextSnapshot(
+            documentID: id,
+            revision: textRevision,
+            text: text
+        )
+        textSnapshotCache = snapshot
+        return snapshot
     }
 
     private func updateDirtyState(_ newValue: Bool) {

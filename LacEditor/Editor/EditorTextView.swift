@@ -213,14 +213,8 @@ struct EditorTextView: NSViewRepresentable {
         }
         if shouldRefreshTextMetrics,
            !textView.hasMarkedText(),
-           let style = textView.defaultParagraphStyle,
-           let storage = textView.textStorage,
-           storage.length > 0 {
-            storage.addAttribute(
-                .paragraphStyle,
-                value: style,
-                range: NSRange(location: 0, length: storage.length)
-            )
+           textView.textStorage?.length ?? 0 > 0 {
+            textView.scheduleParagraphStyleRefresh()
         }
         context.coordinator.updatePerformanceFeatures()
         context.coordinator.updateLineNumbersVisibility(showsLineNumbers)

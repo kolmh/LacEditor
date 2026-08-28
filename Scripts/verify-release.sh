@@ -43,6 +43,7 @@ fi
 
 swiftc \
     LacEditor/Models/EditorLanguage.swift \
+    LacEditor/Models/DocumentEditDelta.swift \
     LacEditor/Models/EditorDocument.swift \
     LacEditor/Services/FileService.swift \
     LacEditor/Services/JSONFormatter.swift \
@@ -54,6 +55,7 @@ swiftc \
     LacEditor/Editor/FoldLayoutManager.swift \
     LacEditor/Editor/CodeLexicalScanner.swift \
     LacEditor/Editor/DelimiterMatchingService.swift \
+    LacEditor/Editor/SyntaxParser.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
     Verification/main.swift \
     -o .build/core-verification

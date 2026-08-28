@@ -22,6 +22,12 @@ final class FindReplaceState: ObservableObject {
 }
 
 enum TextSearchService {
+    struct CacheKey: Hashable, Sendable {
+        let revision: UInt
+        let query: String
+        let caseSensitive: Bool
+    }
+
     static func interpreted(_ value: String, enabled: Bool) -> String {
         guard enabled else { return value }
         var result = ""
@@ -72,6 +78,15 @@ enum TextSearchService {
         return wrapped.location == NSNotFound ? nil : wrapped
     }
 
+    static func nextRange(
+        in matches: [NSRange],
+        after selection: NSRange
+    ) -> NSRange? {
+        guard !matches.isEmpty else { return nil }
+        let location = NSMaxRange(selection)
+        return matches.first(where: { $0.location >= location }) ?? matches[0]
+    }
+
     static func previousRange(
         in text: String,
         query: String,
@@ -92,6 +107,38 @@ enum TextSearchService {
             range: NSRange(location: end, length: nsText.length - end)
         )
         return wrapped.location == NSNotFound ? nil : wrapped
+    }
+
+    static func previousRange(
+        in matches: [NSRange],
+        before selection: NSRange
+    ) -> NSRange? {
+        guard !matches.isEmpty else { return nil }
+        let location = selection.location
+        return matches.last(where: { NSMaxRange($0) <= location }) ?? matches[matches.count - 1]
+    }
+
+    static func allRanges(
+        in text: String,
+        query: String,
+        caseSensitive: Bool,
+        isCancelled: () -> Bool = { false }
+    ) -> [NSRange] {
+        guard !query.isEmpty else { return [] }
+        let nsText = text as NSString
+        let options = compareOptions(caseSensitive: caseSensitive)
+        let queryLength = (query as NSString).length
+        var matches: [NSRange] = []
+        var location = 0
+        while location <= nsText.length - queryLength {
+            if matches.count.isMultiple(of: 512), isCancelled() { return [] }
+            let range = NSRange(location: location, length: nsText.length - location)
+            let match = nsText.range(of: query, options: options, range: range)
+            guard match.location != NSNotFound else { break }
+            matches.append(match)
+            location = max(match.location + max(match.length, 1), location + 1)
+        }
+        return matches
     }
 
     static func selectionMatches(

@@ -37,6 +37,7 @@ swiftc \
 print "[4/7] 大文件性能基线"
 swiftc -O -parse-as-library \
     LacEditor/Models/EditorLanguage.swift \
+    LacEditor/Models/DocumentEditDelta.swift \
     LacEditor/Models/EditorDocument.swift \
     LacEditor/Services/FileService.swift \
     LacEditor/Services/TextSearchService.swift \
@@ -45,6 +46,7 @@ swiftc -O -parse-as-library \
     LacEditor/Editor/FoldLayoutManager.swift \
     LacEditor/Editor/CodeLexicalScanner.swift \
     LacEditor/Editor/DelimiterMatchingService.swift \
+    LacEditor/Editor/SyntaxParser.swift \
     LacEditor/Editor/SyntaxHighlighter.swift \
     Verification/PerformanceVerification.swift \
     -o .build/performance-verification
@@ -58,6 +60,7 @@ fixture_directory=".build/LargeFileFixtures"
 .build/large-fixture-generator "$fixture_directory"
 swiftc -O -parse-as-library \
     LacEditor/Models/EditorLanguage.swift \
+    LacEditor/Models/DocumentEditDelta.swift \
     LacEditor/Models/EditorDocument.swift \
     LacEditor/Services/FileService.swift \
     LacEditor/Services/TextSearchService.swift \

@@ -53,6 +53,8 @@ extension EditorTextView {
         private var highlightedLanguage: EditorLanguage?
         private var highlightedFontSize: CGFloat?
         private var highlightedRanges: [NSRange] = []
+        private var pendingHighlightRanges = DirtyRangeAccumulator()
+        private var lastSyntaxEdit: DocumentEditDelta?
         private var rulerRefreshWorkItem: DispatchWorkItem?
         private var rulerRefreshNeedsLayout = false
         private var selectionVisibilityWorkItem: DispatchWorkItem?
@@ -184,6 +186,9 @@ extension EditorTextView {
         }
 
         deinit {
+#if canImport(SwiftTreeSitter) && canImport(TreeSitterJavaScript) && canImport(TreeSitterTypeScript) && canImport(TreeSitterPython) && canImport(TreeSitterCSS) && canImport(TreeSitterHTML)
+            TreeSitterJavaScriptBackend.invalidate(documentID: document.id)
+#endif
             modelSyncWorkItem?.cancel()
             layoutPrefetchWorkItem?.cancel()
             listNormalizationWorkItem?.cancel()
@@ -912,6 +917,21 @@ extension EditorTextView {
                 )
             )
             contentRevision &+= 1
+            let replacementLength = (replacement as NSString).length
+            let editDelta = DocumentEditDelta(
+                documentID: document.id,
+                revision: contentRevision,
+                editedRange: safeRange,
+                replacementLength: replacementLength,
+                changeInLength: replacementLength - safeRange.length,
+                changedLineRange: nil
+            )
+            lastSyntaxEdit = editDelta
+            pendingHighlightRanges.append(editDelta)
+            translateHighlightedRanges(
+                after: safeRange,
+                replacementLength: replacementLength
+            )
             syntaxHighlightContext.invalidate(after: safeRange.location)
             delimiterMatchingContext.invalidate(after: safeRange.location)
             delimiterSnapshot = nil
@@ -1301,18 +1321,24 @@ extension EditorTextView {
             let language = currentLanguage
             let fontSize = currentFontSize
             let fullRange = NSRange(location: 0, length: storage.length)
-            let targetRange = storage.length > 500_000
-                ? visibleHighlightRange() ?? fullRange
-                : fullRange
-            if highlightedRevision != revision
-                || highlightedLanguage != language
-                || highlightedFontSize != fontSize {
+            let requiresReset = highlightedLanguage != language
+                || highlightedFontSize != fontSize
+            if requiresReset {
+                clearSyntaxAttributesInVisibleRange()
                 highlightedRanges.removeAll(keepingCapacity: true)
+                pendingHighlightRanges.clear()
             }
+            let dirtyRange = pendingHighlightRanges.unionRange
+            let requestedRange = dirtyRange ?? visibleHighlightRange() ?? fullRange
+            let targetRange = expandedHighlightRange(
+                requestedRange,
+                in: storage.length,
+                language: language
+            )
             if highlightedRanges.contains(where: {
                 targetRange.location >= $0.location
                     && NSMaxRange(targetRange) <= NSMaxRange($0)
-            }) {
+            }) && dirtyRange == nil {
                 return
             }
 
@@ -1337,6 +1363,8 @@ extension EditorTextView {
                     range: targetRange,
                     context: self?.syntaxHighlightContext,
                     revision: revision,
+                    documentID: self?.document.id,
+                    edit: self?.lastSyntaxEdit,
                     isCancelled: { operation.isCancelled }
                 )
                 os_signpost(
@@ -1401,8 +1429,59 @@ extension EditorTextView {
             highlightedLanguage = language
             highlightedFontSize = fontSize
             recordHighlightedRange(range)
+            if revision == contentRevision {
+                pendingHighlightRanges.clear()
+            }
             highlightOperation = nil
             refreshRuler()
+        }
+
+        private func translateHighlightedRanges(
+            after editedRange: NSRange,
+            replacementLength: Int
+        ) {
+            guard !highlightedRanges.isEmpty else { return }
+            let delta = replacementLength - editedRange.length
+            let oldEnd = editedRange.upperBound
+            var translated: [NSRange] = []
+            translated.reserveCapacity(highlightedRanges.count)
+            for range in highlightedRanges {
+                if range.upperBound <= editedRange.location {
+                    translated.append(range)
+                } else if range.location >= oldEnd {
+                    translated.append(NSRange(
+                        location: max(0, range.location + delta),
+                        length: range.length
+                    ))
+                }
+                // Ranges intersecting the edit are intentionally dropped. The
+                // next incremental pass removes and recomputes that region.
+            }
+            highlightedRanges = translated
+        }
+
+        private func expandedHighlightRange(
+            _ requested: NSRange,
+            in textLength: Int,
+            language: EditorLanguage
+        ) -> NSRange {
+            guard textLength > 0 else { return NSRange(location: 0, length: 0) }
+            let bounded = NSIntersectionRange(
+                requested,
+                NSRange(location: 0, length: textLength)
+            )
+            guard let text = textView?.string as NSString? else { return bounded }
+            let seed = bounded.length > 0
+                ? bounded
+                : NSRange(
+                    location: min(max(0, requested.location), textLength - 1),
+                    length: 1
+                )
+            let lineRange = text.lineRange(for: seed)
+            let padding = language == .markdown ? 256 : 64 * 1_024
+            let start = max(0, lineRange.location - padding)
+            let end = min(textLength, NSMaxRange(lineRange) + padding)
+            return NSRange(location: start, length: max(0, end - start))
         }
 
         private func recordHighlightedRange(_ range: NSRange) {
@@ -1543,6 +1622,7 @@ extension EditorTextView {
             highlightedLanguage = nil
             highlightedFontSize = nil
             highlightedRanges.removeAll(keepingCapacity: true)
+            pendingHighlightRanges.clear()
             delimiterMatchingContext.reset()
             delimiterSnapshot = nil
             delimiterSnapshotRevision = nil

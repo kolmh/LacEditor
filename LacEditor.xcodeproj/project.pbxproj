@@ -12,6 +12,7 @@
 		A00000000000000000000103 /* LacEditorCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000003 /* LacEditorCommands.swift */; };
 		A00000000000000000000104 /* EditorLanguage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000004 /* EditorLanguage.swift */; };
 		A00000000000000000000105 /* EditorDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000005 /* EditorDocument.swift */; };
+		A00000000000000000000106 /* DocumentEditDelta.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* DocumentEditDelta.swift */; };
 		A0000000000000000000012C /* AppPreferences.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002C /* AppPreferences.swift */; };
 		A0000000000000000000012D /* SidebarLibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002D /* SidebarLibraryStore.swift */; };
 		A00000000000000000000107 /* FileService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000007 /* FileService.swift */; };
@@ -49,11 +50,24 @@
 		A0000000000000000000012B /* TextTransformationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000002B /* TextTransformationView.swift */; };
 		A0000000000000000000012E /* cmark-gfm in Frameworks */ = {isa = PBXBuildFile; productRef = A0000000000000000000081E /* cmark-gfm */; };
 		A0000000000000000000012F /* cmark-gfm-extensions in Frameworks */ = {isa = PBXBuildFile; productRef = A0000000000000000000081F /* cmark-gfm-extensions */; };
+		A00000000000000000000138 /* SwiftTreeSitter in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000820 /* SwiftTreeSitter */; };
+		A00000000000000000000139 /* TreeSitterJavaScript in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000821 /* TreeSitterJavaScript */; };
+		A0000000000000000000013A /* TreeSitterTypeScript in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000822 /* TreeSitterTypeScript */; };
+		A0000000000000000000013B /* TreeSitterPython in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000823 /* TreeSitterPython */; };
+		A0000000000000000000013C /* TreeSitterCSS in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000824 /* TreeSitterCSS */; };
+		A0000000000000000000013D /* TreeSitterHTML in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000825 /* TreeSitterHTML */; };
+		A0000000000000000000013E /* TreeSitterSwift in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000826 /* TreeSitterSwift */; };
+		A0000000000000000000013F /* TreeSitterBash in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000827 /* TreeSitterBash */; };
+		A00000000000000000000140 /* TreeSitterYAML in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000828 /* TreeSitterYAML */; };
+		A00000000000000000000141 /* TreeSitterC in Frameworks */ = {isa = PBXBuildFile; productRef = A00000000000000000000829 /* TreeSitterC */; };
+		A00000000000000000000142 /* TreeSitterCPP in Frameworks */ = {isa = PBXBuildFile; productRef = A0000000000000000000082A /* TreeSitterCPP */; };
+		A00000000000000000000143 /* TreeSitterSQL in Frameworks */ = {isa = PBXBuildFile; productRef = A0000000000000000000082B /* TreeSitterSQL */; };
 		A00000000000000000000130 /* EditorSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000030 /* EditorSessionStore.swift */; };
 		A00000000000000000000131 /* TabDragBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000031 /* TabDragBridge.swift */; };
 		A00000000000000000000132 /* TabScrollBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000032 /* TabScrollBridge.swift */; };
 		A00000000000000000000133 /* SidebarLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000033 /* SidebarLibraryView.swift */; };
 		A00000000000000000000134 /* EditorCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000034 /* EditorCoordinator.swift */; };
+		A00000000000000000000137 /* SyntaxParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000037 /* SyntaxParser.swift */; };
 		A00000000000000000000135 /* DocumentRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000035 /* DocumentRecoveryStore.swift */; };
 		A00000000000000000000136 /* WorkspaceSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000036 /* WorkspaceSessionStore.swift */; };
 /* End PBXBuildFile section */
@@ -64,6 +78,7 @@
 		A00000000000000000000003 /* LacEditorCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LacEditorCommands.swift; sourceTree = "<group>"; };
 		A00000000000000000000004 /* EditorLanguage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorLanguage.swift; sourceTree = "<group>"; };
 		A00000000000000000000005 /* EditorDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDocument.swift; sourceTree = "<group>"; };
+		A00000000000000000000006 /* DocumentEditDelta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentEditDelta.swift; sourceTree = "<group>"; };
 		A0000000000000000000002C /* AppPreferences.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppPreferences.swift; sourceTree = "<group>"; };
 		A0000000000000000000002D /* SidebarLibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarLibraryStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000007 /* FileService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileService.swift; sourceTree = "<group>"; };
@@ -105,6 +120,7 @@
 		A00000000000000000000032 /* TabScrollBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabScrollBridge.swift; sourceTree = "<group>"; };
 		A00000000000000000000033 /* SidebarLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarLibraryView.swift; sourceTree = "<group>"; };
 		A00000000000000000000034 /* EditorCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCoordinator.swift; sourceTree = "<group>"; };
+		A00000000000000000000037 /* SyntaxParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxParser.swift; sourceTree = "<group>"; };
 		A00000000000000000000035 /* DocumentRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentRecoveryStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000036 /* WorkspaceSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSessionStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -120,6 +136,18 @@
 				A00000000000000000000124 /* UniformTypeIdentifiers.framework in Frameworks */,
 				A0000000000000000000012E /* cmark-gfm in Frameworks */,
 				A0000000000000000000012F /* cmark-gfm-extensions in Frameworks */,
+				A00000000000000000000138 /* SwiftTreeSitter in Frameworks */,
+				A00000000000000000000139 /* TreeSitterJavaScript in Frameworks */,
+				A0000000000000000000013A /* TreeSitterTypeScript in Frameworks */,
+				A0000000000000000000013B /* TreeSitterPython in Frameworks */,
+				A0000000000000000000013C /* TreeSitterCSS in Frameworks */,
+				A0000000000000000000013D /* TreeSitterHTML in Frameworks */,
+				A0000000000000000000013E /* TreeSitterSwift in Frameworks */,
+				A0000000000000000000013F /* TreeSitterBash in Frameworks */,
+				A00000000000000000000140 /* TreeSitterYAML in Frameworks */,
+				A00000000000000000000141 /* TreeSitterC in Frameworks */,
+				A00000000000000000000142 /* TreeSitterCPP in Frameworks */,
+				A00000000000000000000143 /* TreeSitterSQL in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -150,9 +178,9 @@
 			sourceTree = "<group>";
 		};
 		A00000000000000000000302 /* App */ = {isa = PBXGroup; children = (A00000000000000000000001, A00000000000000000000002, A0000000000000000000002C, A00000000000000000000003, A0000000000000000000001B); path = App; sourceTree = "<group>"; };
-		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005); path = Models; sourceTree = "<group>"; };
+		A00000000000000000000303 /* Models */ = {isa = PBXGroup; children = (A00000000000000000000004, A00000000000000000000005, A00000000000000000000006); path = Models; sourceTree = "<group>"; };
 		A00000000000000000000304 /* Services */ = {isa = PBXGroup; children = (A00000000000000000000007, A00000000000000000000035, A00000000000000000000036, A00000000000000000000008, A0000000000000000000002D, A00000000000000000000009, A00000000000000000000017, A0000000000000000000002A); path = Services; sourceTree = "<group>"; };
-		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A00000000000000000000028, A00000000000000000000029, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000034, A00000000000000000000030, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
+		A00000000000000000000305 /* Editor */ = {isa = PBXGroup; children = (A0000000000000000000000A, A0000000000000000000000B, A0000000000000000000000C, A00000000000000000000026, A00000000000000000000028, A00000000000000000000029, A0000000000000000000000D, A0000000000000000000000E, A00000000000000000000034, A00000000000000000000037, A00000000000000000000030, A00000000000000000000019, A00000000000000000000025); path = Editor; sourceTree = "<group>"; };
 		A00000000000000000000306 /* Preview */ = {isa = PBXGroup; children = (A0000000000000000000000F, A00000000000000000000010); path = Preview; sourceTree = "<group>"; };
 		A00000000000000000000307 /* Views */ = {isa = PBXGroup; children = (A00000000000000000000027, A00000000000000000000011, A00000000000000000000012, A00000000000000000000013, A00000000000000000000031, A00000000000000000000032, A00000000000000000000014, A00000000000000000000033, A00000000000000000000015, A00000000000000000000016, A00000000000000000000018, A0000000000000000000002B, A0000000000000000000001A); path = Views; sourceTree = "<group>"; };
 		A00000000000000000000309 /* Frameworks */ = {isa = PBXGroup; children = (A00000000000000000000021, A00000000000000000000022, A00000000000000000000023, A00000000000000000000024); name = Frameworks; sourceTree = "<group>"; };
@@ -174,6 +202,18 @@
 			packageProductDependencies = (
 				A0000000000000000000081E /* cmark-gfm */,
 				A0000000000000000000081F /* cmark-gfm-extensions */,
+				A00000000000000000000820 /* SwiftTreeSitter */,
+				A00000000000000000000821 /* TreeSitterJavaScript */,
+				A00000000000000000000822 /* TreeSitterTypeScript */,
+				A00000000000000000000823 /* TreeSitterPython */,
+				A00000000000000000000824 /* TreeSitterCSS */,
+				A00000000000000000000825 /* TreeSitterHTML */,
+				A00000000000000000000826 /* TreeSitterSwift */,
+				A00000000000000000000827 /* TreeSitterBash */,
+				A00000000000000000000828 /* TreeSitterYAML */,
+				A00000000000000000000829 /* TreeSitterC */,
+				A0000000000000000000082A /* TreeSitterCPP */,
+				A0000000000000000000082B /* TreeSitterSQL */,
 			);
 			productName = LacEditor;
 			productReference = A00000000000000000000020 /* LacEditor.app */;
@@ -200,6 +240,18 @@
 			mainGroup = A00000000000000000000300;
 			packageReferences = (
 				A0000000000000000000080E /* XCRemoteSwiftPackageReference "swift-cmark" */,
+				A0000000000000000000080F /* XCRemoteSwiftPackageReference "swift-tree-sitter" */,
+				A00000000000000000000810 /* XCLocalSwiftPackageReference "TreeSitterJavaScript" */,
+				A00000000000000000000811 /* XCLocalSwiftPackageReference "TreeSitterTypeScript" */,
+				A00000000000000000000812 /* XCLocalSwiftPackageReference "TreeSitterPython" */,
+				A00000000000000000000813 /* XCLocalSwiftPackageReference "TreeSitterCSS" */,
+				A00000000000000000000814 /* XCLocalSwiftPackageReference "TreeSitterHTML" */,
+				A00000000000000000000815 /* XCLocalSwiftPackageReference "TreeSitterSwift" */,
+				A00000000000000000000816 /* XCLocalSwiftPackageReference "TreeSitterBash" */,
+				A00000000000000000000817 /* XCLocalSwiftPackageReference "TreeSitterYAML" */,
+				A00000000000000000000818 /* XCLocalSwiftPackageReference "TreeSitterC" */,
+				A00000000000000000000819 /* XCLocalSwiftPackageReference "TreeSitterCPP" */,
+				A0000000000000000000081A /* XCLocalSwiftPackageReference "TreeSitterSQL" */,
 			);
 			productRefGroup = A0000000000000000000030A /* Products */;
 			projectDirPath = "";
@@ -225,7 +277,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A00000000000000000000101, A00000000000000000000102, A00000000000000000000103,
-				A00000000000000000000104, A00000000000000000000105, A0000000000000000000012C,
+				A00000000000000000000104, A00000000000000000000105, A00000000000000000000106, A0000000000000000000012C,
 				A0000000000000000000012D,
 				A00000000000000000000107, A00000000000000000000108, A00000000000000000000109,
 				A0000000000000000000010A, A0000000000000000000010B, A0000000000000000000010C,
@@ -247,6 +299,7 @@
 				A00000000000000000000132,
 				A00000000000000000000133,
 					A00000000000000000000134,
+					A00000000000000000000137,
 					A00000000000000000000135,
 					A00000000000000000000136,
 			);
@@ -263,6 +316,42 @@
 				version = 0.8.0;
 			};
 		};
+		A0000000000000000000080F /* XCRemoteSwiftPackageReference "swift-tree-sitter" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/tree-sitter/swift-tree-sitter.git";
+			requirement = {
+				kind = exactVersion;
+				version = 0.9.0;
+			};
+		};
+/* Begin XCLocalSwiftPackageReference section */
+		A00000000000000000000810 /* XCLocalSwiftPackageReference "TreeSitterJavaScript" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TreeSitterJavaScript;
+		};
+		A00000000000000000000811 /* XCLocalSwiftPackageReference "TreeSitterTypeScript" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TreeSitterTypeScript;
+		};
+		A00000000000000000000812 /* XCLocalSwiftPackageReference "TreeSitterPython" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TreeSitterPython;
+		};
+		A00000000000000000000813 /* XCLocalSwiftPackageReference "TreeSitterCSS" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TreeSitterCSS;
+		};
+		A00000000000000000000814 /* XCLocalSwiftPackageReference "TreeSitterHTML" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Vendor/TreeSitterHTML;
+		};
+		A00000000000000000000815 /* XCLocalSwiftPackageReference "TreeSitterSwift" */ = { isa = XCLocalSwiftPackageReference; relativePath = Vendor/TreeSitterSwift; };
+		A00000000000000000000816 /* XCLocalSwiftPackageReference "TreeSitterBash" */ = { isa = XCLocalSwiftPackageReference; relativePath = Vendor/TreeSitterBash; };
+		A00000000000000000000817 /* XCLocalSwiftPackageReference "TreeSitterYAML" */ = { isa = XCLocalSwiftPackageReference; relativePath = Vendor/TreeSitterYAML; };
+		A00000000000000000000818 /* XCLocalSwiftPackageReference "TreeSitterC" */ = { isa = XCLocalSwiftPackageReference; relativePath = Vendor/TreeSitterC; };
+		A00000000000000000000819 /* XCLocalSwiftPackageReference "TreeSitterCPP" */ = { isa = XCLocalSwiftPackageReference; relativePath = Vendor/TreeSitterCPP; };
+		A0000000000000000000081A /* XCLocalSwiftPackageReference "TreeSitterSQL" */ = { isa = XCLocalSwiftPackageReference; relativePath = Vendor/TreeSitterSQL; };
+/* End XCLocalSwiftPackageReference section */
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -276,6 +365,42 @@
 			package = A0000000000000000000080E /* XCRemoteSwiftPackageReference "swift-cmark" */;
 			productName = "cmark-gfm-extensions";
 		};
+		A00000000000000000000820 /* SwiftTreeSitter */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A0000000000000000000080F /* XCRemoteSwiftPackageReference "swift-tree-sitter" */;
+			productName = SwiftTreeSitter;
+		};
+		A00000000000000000000821 /* TreeSitterJavaScript */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000810 /* XCLocalSwiftPackageReference "TreeSitterJavaScript" */;
+			productName = TreeSitterJavaScript;
+		};
+		A00000000000000000000822 /* TreeSitterTypeScript */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000811 /* XCLocalSwiftPackageReference "TreeSitterTypeScript" */;
+			productName = TreeSitterTypeScript;
+		};
+		A00000000000000000000823 /* TreeSitterPython */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000812 /* XCLocalSwiftPackageReference "TreeSitterPython" */;
+			productName = TreeSitterPython;
+		};
+		A00000000000000000000824 /* TreeSitterCSS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000813 /* XCLocalSwiftPackageReference "TreeSitterCSS" */;
+			productName = TreeSitterCSS;
+		};
+		A00000000000000000000825 /* TreeSitterHTML */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A00000000000000000000814 /* XCLocalSwiftPackageReference "TreeSitterHTML" */;
+			productName = TreeSitterHTML;
+		};
+		A00000000000000000000826 /* TreeSitterSwift */ = { isa = XCSwiftPackageProductDependency; package = A00000000000000000000815 /* XCLocalSwiftPackageReference "TreeSitterSwift" */; productName = TreeSitterSwift; };
+		A00000000000000000000827 /* TreeSitterBash */ = { isa = XCSwiftPackageProductDependency; package = A00000000000000000000816 /* XCLocalSwiftPackageReference "TreeSitterBash" */; productName = TreeSitterBash; };
+		A00000000000000000000828 /* TreeSitterYAML */ = { isa = XCSwiftPackageProductDependency; package = A00000000000000000000817 /* XCLocalSwiftPackageReference "TreeSitterYAML" */; productName = TreeSitterYAML; };
+		A00000000000000000000829 /* TreeSitterC */ = { isa = XCSwiftPackageProductDependency; package = A00000000000000000000818 /* XCLocalSwiftPackageReference "TreeSitterC" */; productName = TreeSitterC; };
+		A0000000000000000000082A /* TreeSitterCPP */ = { isa = XCSwiftPackageProductDependency; package = A00000000000000000000819 /* XCLocalSwiftPackageReference "TreeSitterCPP" */; productName = TreeSitterCPP; };
+		A0000000000000000000082B /* TreeSitterSQL */ = { isa = XCSwiftPackageProductDependency; package = A0000000000000000000081A /* XCLocalSwiftPackageReference "TreeSitterSQL" */; productName = TreeSitterSQL; };
 /* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -288,7 +413,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -298,7 +423,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.12.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -314,7 +439,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 37;
+				CURRENT_PROJECT_VERSION = 38;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -324,7 +449,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.11.0;
+				MARKETING_VERSION = 0.12.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;

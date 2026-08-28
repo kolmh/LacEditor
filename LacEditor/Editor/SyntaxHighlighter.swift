@@ -130,7 +130,9 @@ enum SyntaxHighlighter {
         range requestedRange: NSRange? = nil,
         context: IncrementalContext? = nil,
         revision: UInt? = nil,
-        isCancelled: () -> Bool = { false }
+        documentID: UUID? = nil,
+        edit: DocumentEditDelta? = nil,
+        isCancelled: @escaping () -> Bool = { false }
     ) -> [Token] {
         let nsString = string as NSString
         let fullRange = NSRange(location: 0, length: nsString.length)
@@ -138,6 +140,28 @@ enum SyntaxHighlighter {
             NSIntersectionRange($0, fullRange)
         } ?? fullRange
         guard highlightRange.length > 0 else { return [] }
+
+        return SyntaxParserRegistry.backend(for: language).tokens(
+            in: string,
+            language: language,
+            range: highlightRange,
+            context: context,
+            revision: revision,
+            documentID: documentID,
+            edit: edit,
+            isCancelled: { isCancelled() }
+        )
+    }
+
+    static func lexicalTokens(
+        in string: String,
+        language: EditorLanguage,
+        range highlightRange: NSRange,
+        context: IncrementalContext?,
+        revision: UInt?,
+        isCancelled: () -> Bool
+    ) -> [Token] {
+        let nsString = string as NSString
 
         switch language {
         case .plainText:

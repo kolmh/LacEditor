@@ -141,7 +141,13 @@ enum SidebarPresentation: Equatable {
 
 @MainActor
 final class AppState: ObservableObject {
+    private struct SearchMatchCacheEntry {
+        let key: TextSearchService.CacheKey
+        let matches: [NSRange]
+    }
+
     @Published var documents: [EditorDocument] = []
+    private var searchMatchCache: [UUID: SearchMatchCacheEntry] = [:]
     @Published var selectedDocumentID: UUID? {
         didSet {
             guard oldValue != selectedDocumentID,
@@ -859,8 +865,9 @@ final class AppState: ObservableObject {
 
     func formatJSON(pretty: Bool = true) {
         guard let document = selectedDocument, document.language == .json else { return }
-        let source = document.synchronizedText()
-        let revision = document.textRevision
+        let snapshot = document.synchronizedSnapshot()
+        let source = snapshot.text
+        let revision = snapshot.revision
         document.statusMessage = pretty ? "正在格式化 JSON…" : "正在压缩 JSON…"
         performCancellableDocumentTask(document, kind: .json) { isCancelled in
             Result {
@@ -1066,7 +1073,7 @@ final class AppState: ObservableObject {
 
     func findNext() {
         guard let document = selectedDocument else { return }
-        let source = document.synchronizedText()
+        let source = document.synchronizedSnapshot().text
         let query = interpretedSearchQuery()
         guard !query.isEmpty else {
             presentFindReplace(mode: .find)
@@ -1083,7 +1090,7 @@ final class AppState: ObservableObject {
 
     func findPrevious() {
         guard let document = selectedDocument else { return }
-        let source = document.synchronizedText()
+        let source = document.synchronizedSnapshot().text
         let query = interpretedSearchQuery()
         guard !query.isEmpty else {
             presentFindReplace(mode: .find)
@@ -1100,7 +1107,7 @@ final class AppState: ObservableObject {
 
     func replaceCurrentMatch() {
         guard let document = selectedDocument else { return }
-        let source = document.synchronizedText()
+        let source = document.synchronizedSnapshot().text
         let query = interpretedSearchQuery()
         guard !query.isEmpty else {
             findReplace.message = "请输入查找内容"
@@ -1138,7 +1145,8 @@ final class AppState: ObservableObject {
 
     func replaceAllMatches() {
         guard let document = selectedDocument else { return }
-        let source = document.synchronizedText()
+        let snapshot = document.synchronizedSnapshot()
+        let source = snapshot.text
         let query = interpretedSearchQuery()
         guard !query.isEmpty else {
             findReplace.message = "请输入查找内容"
@@ -1148,7 +1156,7 @@ final class AppState: ObservableObject {
             findReplace.replacement,
             enabled: findReplace.interpretsEscapes
         )
-        let revision = document.textRevision
+        let revision = snapshot.revision
         let rawQuery = findReplace.query
         let caseSensitive = findReplace.isCaseSensitive
         findReplace.isWorking = true
@@ -1371,43 +1379,94 @@ final class AppState: ObservableObject {
         let revision = document.textRevision
         let rawQuery = findReplace.query
         let caseSensitive = findReplace.isCaseSensitive
+        let cacheKey = TextSearchService.CacheKey(
+            revision: revision,
+            query: query,
+            caseSensitive: caseSensitive
+        )
         findReplace.isWorking = true
         findReplace.activeDocumentID = document.id
         findReplace.message = "正在查找…"
-        performDocumentTask(document, kind: .search) {
-            if backwards {
-                TextSearchService.previousRange(
-                    in: source,
-                    query: query,
-                    before: selection,
-                    caseSensitive: caseSensitive
+
+        if let cached = searchMatchCache[document.id], cached.key == cacheKey {
+            let range = backwards
+                ? TextSearchService.previousRange(
+                    in: cached.matches,
+                    before: selection
                 )
-            } else {
-                TextSearchService.nextRange(
-                    in: source,
-                    query: query,
-                    after: selection,
-                    caseSensitive: caseSensitive
+                : TextSearchService.nextRange(
+                    in: cached.matches,
+                    after: selection
                 )
-            }
-        } completion: { [weak self, weak document] range in
-            guard let self, let document else { return }
-            guard self.findReplace.activeDocumentID == document.id else { return }
-            self.findReplace.isWorking = false
-            self.findReplace.activeDocumentID = nil
-            guard self.findReplace.query == rawQuery,
-                  self.findReplace.isCaseSensitive == caseSensitive,
-                  self.isTaskResultCurrent(document, revision: revision) else {
-                self.findReplace.message = "内容已变化，已取消查找"
-                return
-            }
-            guard let range else {
-                self.findReplace.message = "未找到匹配内容"
-                return
-            }
-            self.reveal(range, in: document)
-            self.findReplace.message = "已找到匹配内容"
+            finishFind(
+                range,
+                in: document,
+                revision: revision,
+                rawQuery: rawQuery,
+                caseSensitive: caseSensitive
+            )
+            return
         }
+
+        performCancellableDocumentTask(document, kind: .search) { isCancelled in
+            TextSearchService.allRanges(
+                in: source,
+                query: query,
+                caseSensitive: caseSensitive,
+                isCancelled: isCancelled
+            )
+        } completion: { [weak self, weak document] matches in
+            guard let self, let document else { return }
+            self.searchMatchCache[document.id] = SearchMatchCacheEntry(
+                key: cacheKey,
+                matches: matches
+            )
+            if self.searchMatchCache.count > 4 {
+                self.searchMatchCache.removeValue(
+                    forKey: self.searchMatchCache.keys.first!
+                )
+            }
+            let range = backwards
+                ? TextSearchService.previousRange(
+                    in: matches,
+                    before: selection
+                )
+                : TextSearchService.nextRange(
+                    in: matches,
+                    after: selection
+                )
+            self.finishFind(
+                range,
+                in: document,
+                revision: revision,
+                rawQuery: rawQuery,
+                caseSensitive: caseSensitive
+            )
+        }
+    }
+
+    private func finishFind(
+        _ range: NSRange?,
+        in document: EditorDocument,
+        revision: UInt,
+        rawQuery: String,
+        caseSensitive: Bool
+    ) {
+        guard findReplace.activeDocumentID == document.id else { return }
+        findReplace.isWorking = false
+        findReplace.activeDocumentID = nil
+        guard findReplace.query == rawQuery,
+              findReplace.isCaseSensitive == caseSensitive,
+              isTaskResultCurrent(document, revision: revision) else {
+            findReplace.message = "内容已变化，已取消查找"
+            return
+        }
+        guard let range else {
+            findReplace.message = "未找到匹配内容"
+            return
+        }
+        reveal(range, in: document)
+        findReplace.message = "已找到匹配内容"
     }
 
     private func performDocumentTask<Result>(

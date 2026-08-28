@@ -66,6 +66,9 @@ final class LacTextView: NSTextView {
     var indentationStyle: IndentationStyle = .spaces
     var tabWidth: Int = 4
     var editorLineSpacing: CGFloat = FoldLayoutManager.defaultLineSpacing
+    private var paragraphRefreshGeneration: UInt = 0
+    private var paragraphRefreshLocation = 0
+    private var paragraphRefreshWorkItem: DispatchWorkItem?
 
     var editorLineHeight: CGFloat {
         (layoutManager as? FoldLayoutManager)?.editorLineHeight
@@ -352,6 +355,67 @@ final class LacTextView: NSTextView {
         typingAttributes[.paragraphStyle] = paragraphStyle
         defaultParagraphStyle = paragraphStyle
         enclosingScrollView?.lineScroll = editorLineHeight
+    }
+
+    /// Apply paragraph attributes in cancellable chunks so large documents do
+    /// not block typing and window resizing for one long main-thread turn.
+    func scheduleParagraphStyleRefresh(chunkSize: Int = 32 * 1_024) {
+        paragraphRefreshWorkItem?.cancel()
+        paragraphRefreshGeneration &+= 1
+        paragraphRefreshLocation = 0
+        let generation = paragraphRefreshGeneration
+        let work = DispatchWorkItem { [weak self] in
+            self?.applyParagraphStyleChunk(
+                generation: generation,
+                chunkSize: chunkSize
+            )
+        }
+        paragraphRefreshWorkItem = work
+        DispatchQueue.main.async(execute: work)
+    }
+
+    private func applyParagraphStyleChunk(
+        generation: UInt,
+        chunkSize: Int
+    ) {
+        guard generation == paragraphRefreshGeneration,
+              paragraphRefreshWorkItem?.isCancelled != true,
+              let storage = textStorage,
+              let style = defaultParagraphStyle,
+              storage.length > 0 else {
+            paragraphRefreshWorkItem = nil
+            return
+        }
+        let start = min(paragraphRefreshLocation, storage.length)
+        let end = min(storage.length, start + max(1, chunkSize))
+        guard end > start else {
+            paragraphRefreshWorkItem = nil
+            return
+        }
+        storage.addAttribute(
+            .paragraphStyle,
+            value: style,
+            range: NSRange(location: start, length: end - start)
+        )
+        paragraphRefreshLocation = end
+        if end < storage.length {
+            let next = DispatchWorkItem { [weak self] in
+                self?.applyParagraphStyleChunk(
+                    generation: generation,
+                    chunkSize: chunkSize
+                )
+            }
+            paragraphRefreshWorkItem = next
+            DispatchQueue.main.async(execute: next)
+        } else {
+            paragraphRefreshWorkItem = nil
+        }
+    }
+
+    func cancelParagraphStyleRefresh() {
+        paragraphRefreshWorkItem?.cancel()
+        paragraphRefreshWorkItem = nil
+        paragraphRefreshGeneration &+= 1
     }
 
     override func insertNewline(_ sender: Any?) {
