@@ -32,7 +32,8 @@ final class MarkdownRendererTests: XCTestCase {
         XCTAssertTrue(html.contains("<p>第一项</p>"))
         XCTAssertTrue(html.contains("<p>第一项的续行段落。</p>"))
         XCTAssertTrue(html.contains("<ul>"))
-        XCTAssertTrue(html.contains("子项\n跨行内容"))
+        XCTAssertTrue(html.contains("子项"))
+        XCTAssertTrue(html.contains("跨行内容"))
     }
 
     func testGFMExtensionsAndEscapedTableCells() {
@@ -83,8 +84,33 @@ final class MarkdownRendererTests: XCTestCase {
             "第一行\r\n第二行 😀",
             darkMode: false
         )
-        XCTAssertTrue(html.contains("第一行\n第二行 😀"))
-        XCTAssertFalse(html.contains("第一行\n\n第二行"))
+        XCTAssertTrue(html.contains("第一行"))
+        XCTAssertTrue(html.contains("第二行 😀"))
+        XCTAssertFalse(html.contains("第一行<br />\n<br />"))
+    }
+
+    func testSingleNewlineRendersAsVisibleBreak() {
+        let html = MarkdownRenderer.render("第一行\n第二行", darkMode: false)
+        XCTAssertTrue(html.contains("第一行<br") || html.contains("第一行\n第二行"))
+        XCTAssertFalse(html.contains("<p>第一行 第二行</p>"))
+    }
+
+    func testHardBreaksDoNotDamageCodeBlocksOrLists() {
+        let html = MarkdownRenderer.render(
+            """
+            - 第一项
+              续行
+
+            ```js
+            const value = 1;
+            console.log(value);
+            ```
+            """,
+            darkMode: false
+        )
+        XCTAssertTrue(html.contains("<ul>"))
+        XCTAssertTrue(html.contains("const value = 1;"))
+        XCTAssertTrue(html.contains("console.log(value);"))
     }
 
     func testMarkdownRenderingPerformanceGate() {

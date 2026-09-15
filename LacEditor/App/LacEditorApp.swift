@@ -154,6 +154,28 @@ private struct WindowThemeCoordinator: NSViewRepresentable {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var sharedManager: WindowManager?
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        open(urls)
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        open(filenames.map { URL(fileURLWithPath: $0) })
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    private func open(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task { @MainActor in
+            // Finder can deliver the event before SwiftUI has finished
+            // registering the primary window. Deferring one turn lets the
+            // existing WindowManager routing handle both cases consistently.
+            await Task.yield()
+            for url in urls where url.isFileURL {
+                Self.sharedManager?.openFile(url, preferredState: nil)
+            }
+        }
+    }
+
     func applicationDidResignActive(_ notification: Notification) {
         Self.sharedManager?.persistRecoverySnapshotsImmediately()
     }

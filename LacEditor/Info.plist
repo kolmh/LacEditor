@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>LacEditor</string>
+	<key>CFBundleName</key>
+	<string>LacEditor</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Text and Source Code</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>txt</string>
+				<string>md</string>
+				<string>markdown</string>
+				<string>html</string>
+				<string>htm</string>
+				<string>json</string>
+				<string>js</string>
+				<string>mjs</string>
+				<string>cjs</string>
+				<string>ts</string>
+				<string>tsx</string>
+				<string>css</string>
+				<string>py</string>
+				<string>pyw</string>
+				<string>swift</string>
+				<string>sh</string>
+				<string>bash</string>
+				<string>zsh</string>
+				<string>yaml</string>
+				<string>yml</string>
+				<string>c</string>
+				<string>h</string>
+				<string>cc</string>
+				<string>cpp</string>
+				<string>cxx</string>
+				<string>hpp</string>
+				<string>sql</string>
+			</array>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.plain-text</string>
+				<string>public.text</string>
+				<string>public.source-code</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

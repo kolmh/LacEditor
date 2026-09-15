@@ -70,7 +70,10 @@ enum MarkdownRenderer {
 
     private static func renderBody(_ markdown: String) -> String {
         cmark_gfm_core_extensions_ensure_registered()
-        let options = CMARK_OPT_SMART | CMARK_OPT_TABLE_SPANS
+        // Treat ordinary single newlines as visible line breaks in the preview.
+        // This keeps blank-line paragraph separation intact while preventing
+        // prose pasted from the editor from appearing as one wrapped line.
+        let options = CMARK_OPT_SMART | CMARK_OPT_TABLE_SPANS | CMARK_OPT_HARDBREAKS
         guard let parser = cmark_parser_new(options) else { return "" }
         defer { cmark_parser_free(parser) }
 

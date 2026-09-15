@@ -48,7 +48,7 @@ let package = Package(
                 .product(name: "TreeSitterSQL", package: "TreeSitterSQL")
             ],
             path: "LacEditor",
-            exclude: ["Assets.xcassets"],
+            exclude: ["Assets.xcassets", "Info.plist"],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("SwiftUI"),
