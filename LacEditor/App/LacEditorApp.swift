@@ -151,27 +151,90 @@ private struct WindowThemeCoordinator: NSViewRepresentable {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     static weak var sharedManager: WindowManager?
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // SwiftUI's Window scene may consume Finder's open-document event
+        // before application(_:open:) is called. Intercept the AppKit event
+        // directly so an existing workspace stays alive and receives the URL.
+        NSAppleEventManager.shared().setEventHandler(
+            self,
+            andSelector: #selector(handleOpenDocuments(_:withReplyEvent:)),
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEOpenDocuments)
+        )
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        NSAppleEventManager.shared().removeEventHandler(
+            forEventClass: AEEventClass(kCoreEventClass),
+            andEventID: AEEventID(kAEOpenDocuments)
+        )
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(
+        _ sender: NSApplication
+    ) -> Bool {
+        // Finder's document event can briefly close the SwiftUI scene while
+        // routing the file. Keep the application alive so the existing
+        // workspace and unsaved tabs are not discarded.
+        false
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            Self.sharedManager?.activeState?.hostWindow?.makeKeyAndOrderFront(nil)
+        }
+        return true
+    }
+
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        true
+    }
+
+    func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
+        Self.sharedManager?.activeState?.hostWindow?.makeKeyAndOrderFront(nil)
+        return true
+    }
+
     func application(_ application: NSApplication, open urls: [URL]) {
-        open(urls)
+        openFilesFromFinder(urls)
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        open(filenames.map { URL(fileURLWithPath: $0) })
+        openFilesFromFinder(filenames.map { URL(fileURLWithPath: $0) })
         sender.reply(toOpenOrPrint: .success)
     }
 
-    private func open(_ urls: [URL]) {
+    private func openFilesFromFinder(_ urls: [URL]) {
         guard !urls.isEmpty else { return }
-        Task { @MainActor in
-            // Finder can deliver the event before SwiftUI has finished
-            // registering the primary window. Deferring one turn lets the
-            // existing WindowManager routing handle both cases consistently.
-            await Task.yield()
-            Self.sharedManager?.openFilesFromFinder(urls)
+        Self.sharedManager?.openFilesFromFinder(urls)
+    }
+
+    @objc private func handleOpenDocuments(
+        _ event: NSAppleEventDescriptor,
+        withReplyEvent replyEvent: NSAppleEventDescriptor
+    ) {
+        guard let directObject = event.paramDescriptor(forKeyword: keyDirectObject) else {
+            return
         }
+
+        var urls: [URL] = []
+        if directObject.numberOfItems > 0 {
+            for index in 1...directObject.numberOfItems {
+                if let url = directObject.atIndex(index)?.fileURLValue {
+                    urls.append(url)
+                }
+            }
+        } else if let url = directObject.fileURLValue {
+            urls.append(url)
+        }
+        openFilesFromFinder(urls)
     }
 
     func applicationDidResignActive(_ notification: Notification) {
