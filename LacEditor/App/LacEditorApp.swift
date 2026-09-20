@@ -170,9 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // registering the primary window. Deferring one turn lets the
             // existing WindowManager routing handle both cases consistently.
             await Task.yield()
-            for url in urls where url.isFileURL {
-                Self.sharedManager?.openFile(url, preferredState: nil)
-            }
+            Self.sharedManager?.openFilesFromFinder(urls)
         }
     }
 

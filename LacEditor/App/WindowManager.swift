@@ -48,6 +48,7 @@ final class WindowManager: ObservableObject {
     }
     private var initialRestoredWindow: RestoredWindow?
     private var pendingRestoredWindows: [RestoredWindow] = []
+    private var pendingFinderURLs: [URL] = []
     private var didApplyInitialRestoration = false
     private lazy var appearanceMenuController = AppearanceMenuController(
         windowManager: self
@@ -91,15 +92,42 @@ final class WindowManager: ObservableObject {
         if window.isKeyWindow || activeState == nil {
             activate(windowID: windowID)
         }
-        guard !didApplyInitialRestoration,
-              let restoration = initialRestoredWindow else { return }
-        didApplyInitialRestoration = true
-        apply(restoration, to: state, window: window)
-        let additionalWindows = pendingRestoredWindows
-        pendingRestoredWindows.removeAll()
-        DispatchQueue.main.async { [weak self] in
-            additionalWindows.forEach { self?.openRestoredWindow($0) }
+        if !didApplyInitialRestoration,
+           let restoration = initialRestoredWindow {
+            didApplyInitialRestoration = true
+            apply(restoration, to: state, window: window)
+            let additionalWindows = pendingRestoredWindows
+            pendingRestoredWindows.removeAll()
+            DispatchQueue.main.async { [weak self] in
+                additionalWindows.forEach { self?.openRestoredWindow($0) }
+                self?.drainPendingFinderURLs()
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                self?.drainPendingFinderURLs()
+            }
         }
+    }
+
+    /// Routes files opened from Finder into the already registered editor
+    /// window. Finder can send this event while SwiftUI is still constructing
+    /// the primary scene, so retain the URLs until registration completes
+    /// instead of creating a temporary second window.
+    func openFilesFromFinder(_ urls: [URL]) {
+        let files = urls.filter(\.isFileURL)
+        guard !files.isEmpty else { return }
+        guard activeState != nil else {
+            pendingFinderURLs.append(contentsOf: files)
+            return
+        }
+        files.forEach { openFile($0, preferredState: activeState) }
+    }
+
+    private func drainPendingFinderURLs() {
+        guard activeState != nil, !pendingFinderURLs.isEmpty else { return }
+        let files = pendingFinderURLs
+        pendingFinderURLs.removeAll()
+        files.forEach { openFile($0, preferredState: activeState) }
     }
 
     func activate(windowID: UUID) {
