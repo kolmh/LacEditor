@@ -115,6 +115,33 @@ final class LacTextView: NSTextView {
         super.keyDown(with: event)
     }
 
+    override func mouseDown(with event: NSEvent) {
+        // TextKit represents a final empty line (the line after a trailing
+        // newline) as an extra line fragment without a character range. Its
+        // default hit testing maps clicks in that fragment back to the
+        // preceding newline, which makes the last visible line impossible to
+        // place the caret in from the editor area. Treat the fragment as the
+        // document-end insertion point before falling back to AppKit.
+        if let layoutManager,
+           let storage = textStorage,
+           storage.length > 0,
+           storage.mutableString.character(at: storage.length - 1)
+                == 10,
+           !layoutManager.extraLineFragmentRect.isEmpty {
+            let point = convert(event.locationInWindow, from: nil)
+            var extraRect = layoutManager.extraLineFragmentRect
+            extraRect.origin.x += textContainerOrigin.x
+            extraRect.origin.y += textContainerOrigin.y
+            extraRect.size.width = max(bounds.width, extraRect.width)
+            if extraRect.insetBy(dx: 0, dy: -2).contains(point) {
+                window?.makeFirstResponder(self)
+                setSelectedRange(NSRange(location: storage.length, length: 0))
+                return
+            }
+        }
+        super.mouseDown(with: event)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard requestsFirstResponderWhenAttached,

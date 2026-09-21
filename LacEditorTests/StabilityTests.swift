@@ -3,6 +3,42 @@ import XCTest
 @testable import LacEditor
 
 final class StabilityTests: XCTestCase {
+    func testDocumentTaskCoordinatorCancelsRegisteredAsyncTask() {
+        let coordinator = DocumentTaskCoordinator()
+        var cancelled = false
+        let generation = coordinator.beginTask(.preview) {
+            cancelled = true
+        }
+
+        XCTAssertTrue(coordinator.isCurrent(generation, for: .preview))
+        coordinator.cancel(.preview)
+        XCTAssertTrue(cancelled)
+        XCTAssertFalse(coordinator.isCurrent(generation, for: .preview))
+    }
+
+    func testSearchMatchCacheEvictsLeastRecentlyUsedDocument() {
+        var cache = SearchMatchCacheStore(capacity: 2)
+        let first = UUID()
+        let second = UUID()
+        let third = UUID()
+        let key = { revision in
+            TextSearchService.CacheKey(
+                revision: revision,
+                query: "needle",
+                caseSensitive: false
+            )
+        }
+
+        cache.insert(.init(key: key(1), matches: [NSRange(location: 1, length: 2)]), for: first)
+        cache.insert(.init(key: key(2), matches: [NSRange(location: 3, length: 2)]), for: second)
+        XCTAssertNotNil(cache.value(for: first, key: key(1)))
+        cache.insert(.init(key: key(3), matches: [NSRange(location: 5, length: 2)]), for: third)
+
+        XCTAssertNotNil(cache.value(for: first, key: key(1)))
+        XCTAssertNil(cache.value(for: second, key: key(2)))
+        XCTAssertNotNil(cache.value(for: third, key: key(3)))
+    }
+
     func testDirtyRangeAccumulatorTranslatesEditsInUTF16Coordinates() {
         let id = UUID()
         var accumulator = DirtyRangeAccumulator()
@@ -573,6 +609,23 @@ final class StabilityTests: XCTestCase {
     }
 
 #if canImport(SwiftTreeSitter) && canImport(TreeSitterJavaScript)
+    func testTreeSitterJavaScriptRangePruningKeepsOnlyIntersectingTokens() {
+        let source = "const first = 1;\n// second line\nconst third = 3;"
+        let secondLine = (source as NSString).range(of: "// second line")
+        let tokens = SyntaxHighlighter.tokens(
+            in: source,
+            language: .javascript,
+            range: secondLine,
+            revision: 1,
+            documentID: UUID()
+        )
+
+        XCTAssertTrue(tokens.contains { $0.kind == .comment })
+        XCTAssertTrue(tokens.allSatisfy {
+            NSIntersectionRange($0.range, secondLine).length > 0
+        })
+    }
+
     func testTreeSitterJavaScriptUsesUTF16RangesAndIncrementalEdits() {
         let documentID = UUID()
         let source = "const 中文 = \"😀\"; // 注释\nconst value = /[()]/;"

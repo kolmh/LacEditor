@@ -8,12 +8,12 @@ LacEditor 为日常文本、Markdown、JSON 和代码编辑而生：打开即写
 <p>
   <a href="https://github.com/kolmh/LacEditor/releases/latest">下载最新版</a>
   ·
-  <a href="https://github.com/kolmh/LacEditor/releases/tag/v0.13.5">查看更新日志</a>
+  <a href="https://github.com/kolmh/LacEditor/releases/tag/v0.13.6">查看更新日志</a>
   ·
   <a href="https://github.com/kolmh/LacEditor/issues">反馈问题</a>
 </p>
 
-> 当前版本：`0.13.5` · macOS 26+ · Apple Silicon
+> 当前版本：`0.13.6` · macOS 26+ · Apple Silicon
 
 ## 为什么是 LacEditor？
 
@@ -88,11 +88,11 @@ LacEditor 使用 SwiftUI 构建界面，AppKit `NSTextView` 负责编辑，TextK
 
 ## 路线图
 
-正在规划的方向包括：
+完整的性能与架构路线记录在 [docs/ROADMAP.md](docs/ROADMAP.md)，当前规划分为三阶段：
 
-- 多个大型标签的渐进式工作区恢复
-- 侧边栏键盘导航与批量管理
-- 更完整的项目级搜索与文件夹工作区记忆
+- 第一阶段：减少 Markdown 预览全文复制、完善搜索缓存、补齐行号和末尾空行回归测试。
+- 第二阶段：按脏范围剪枝 Tree-sitter，拆分高亮/折叠任务，减少长代码文件的主线程工作。
+- 第三阶段：抽象 TextKit 渲染属性，验证 TextKit 2 和更原生的文档生命周期方案。
 
 Git、插件系统、云同步和双向链接暂不属于 LacEditor 的核心路线。
 

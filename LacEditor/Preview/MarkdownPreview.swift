@@ -24,6 +24,9 @@ private final class MarkdownWebView: WKWebView {
 
 struct MarkdownPreview: NSViewRepresentable {
     let markdown: String
+    /// The document revision is used for change detection so SwiftUI updates
+    /// never need to concatenate or copy the complete Markdown source.
+    let revision: UInt
     let darkMode: Bool
     @ObservedObject var document: EditorDocument
 
@@ -43,30 +46,31 @@ struct MarkdownPreview: NSViewRepresentable {
             guard let view, let coordinator else { return }
             coordinator.reloadLastRenderedHTML(in: view)
         }
-        context.coordinator.render(markdown: markdown, darkMode: darkMode, immediately: true)
+        context.coordinator.render(
+            markdown: markdown,
+            revision: revision,
+            darkMode: darkMode,
+            immediately: true
+        )
         return view
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {
         context.coordinator.document = document
-        context.coordinator.render(markdown: markdown, darkMode: darkMode)
+        context.coordinator.render(markdown: markdown, revision: revision, darkMode: darkMode)
     }
 
     final class Coordinator: NSObject, WKNavigationDelegate {
         weak var webView: WKWebView?
         weak var document: EditorDocument?
         private var workItem: DispatchWorkItem?
-        private var lastPayload = ""
+        private var renderTask: Task<Void, Never>?
+        private var lastRevision: UInt?
+        private var lastDarkMode: Bool?
         private var lastRenderedHTML = ""
+        private weak var cachedScrollView: NSScrollView?
         private var generation = 0
         private var pendingScrollRatio: CGFloat = 0
-        private let renderQueue: OperationQueue = {
-            let queue = OperationQueue()
-            queue.name = "com.laceditor.markdown-rendering"
-            queue.maxConcurrentOperationCount = 1
-            queue.qualityOfService = .userInitiated
-            return queue
-        }()
 
         init(document: EditorDocument) {
             self.document = document
@@ -74,13 +78,18 @@ struct MarkdownPreview: NSViewRepresentable {
 
         deinit {
             workItem?.cancel()
-            renderQueue.cancelAllOperations()
+            renderTask?.cancel()
         }
 
-        func render(markdown: String, darkMode: Bool, immediately: Bool = false) {
-            let payload = "\(darkMode)|\(markdown)"
-            guard payload != lastPayload else { return }
-            lastPayload = payload
+        func render(
+            markdown: String,
+            revision: UInt,
+            darkMode: Bool,
+            immediately: Bool = false
+        ) {
+            guard revision != lastRevision || darkMode != lastDarkMode else { return }
+            lastRevision = revision
+            lastDarkMode = darkMode
             workItem?.cancel()
             generation += 1
             let requestedGeneration = generation
@@ -107,10 +116,14 @@ struct MarkdownPreview: NSViewRepresentable {
             generation requestedGeneration: Int
         ) {
             guard let document else { return }
-            let taskGeneration = document.taskCoordinator.begin(.preview)
-            let operation = BlockOperation()
-            operation.addExecutionBlock { [weak self, weak document, weak operation] in
-                guard let self, let document, let operation, !operation.isCancelled else { return }
+            renderTask?.cancel()
+            var task: Task<Void, Never>?
+            let taskGeneration = document.taskCoordinator.beginTask(.preview) {
+                task?.cancel()
+            }
+            let taskCoordinator = document.taskCoordinator
+            task = Task.detached(priority: .userInitiated) { [weak self, weak document] in
+                guard let self, !Task.isCancelled else { return }
                 let signpostID = OSSignpostID(log: markdownPerformanceLog)
                 os_signpost(
                     .begin,
@@ -125,11 +138,11 @@ struct MarkdownPreview: NSViewRepresentable {
                     name: "MarkdownRender",
                     signpostID: signpostID
                 )
-                guard !operation.isCancelled,
-                      document.taskCoordinator.isCurrent(taskGeneration, for: .preview) else { return }
-                DispatchQueue.main.async { [weak self, weak document, weak operation] in
-                    guard let self, let document, let operation,
-                          !operation.isCancelled,
+                guard !Task.isCancelled,
+                      taskCoordinator.isCurrent(taskGeneration, for: .preview) else { return }
+                await MainActor.run { [weak self, weak document] in
+                    guard let self, let document,
+                          !Task.isCancelled,
                           requestedGeneration == generation,
                           document.taskCoordinator.isCurrent(taskGeneration, for: .preview),
                           let webView else { return }
@@ -140,12 +153,7 @@ struct MarkdownPreview: NSViewRepresentable {
                     webView.loadHTMLString(html, baseURL: nil)
                 }
             }
-            document.taskCoordinator.attach(
-                operation,
-                kind: .preview,
-                generation: taskGeneration
-            )
-            renderQueue.addOperation(operation)
+            renderTask = task
         }
 
         private func scrollRatio(in webView: WKWebView) -> CGFloat {
@@ -184,9 +192,17 @@ struct MarkdownPreview: NSViewRepresentable {
         }
 
         private func findScrollView(in view: NSView) -> NSScrollView? {
+            if let cachedScrollView,
+               cachedScrollView !== view,
+               cachedScrollView.window != nil {
+                return cachedScrollView
+            }
             if let scrollView = view as? NSScrollView { return scrollView }
             for subview in view.subviews {
-                if let scrollView = findScrollView(in: subview) { return scrollView }
+                if let scrollView = findScrollView(in: subview) {
+                    cachedScrollView = scrollView
+                    return scrollView
+                }
             }
             return nil
         }

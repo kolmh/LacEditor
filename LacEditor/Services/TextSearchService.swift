@@ -191,3 +191,41 @@ enum TextSearchService {
         caseSensitive ? [.literal] : [.literal, .caseInsensitive]
     }
 }
+
+/// Per-document search result cache with deterministic least-recently-used eviction.
+/// The cache stores only ranges; the caller remains responsible for revision validation
+/// through `CacheKey`.
+struct SearchMatchCacheStore {
+    struct Entry {
+        let key: TextSearchService.CacheKey
+        let matches: [NSRange]
+    }
+
+    let capacity: Int
+    private(set) var entries: [UUID: Entry] = [:]
+    private var usage: [UUID] = []
+
+    init(capacity: Int = 4) {
+        self.capacity = max(1, capacity)
+    }
+
+    mutating func value(for documentID: UUID, key: TextSearchService.CacheKey) -> Entry? {
+        guard let entry = entries[documentID], entry.key == key else { return nil }
+        touch(documentID)
+        return entry
+    }
+
+    mutating func insert(_ entry: Entry, for documentID: UUID) {
+        entries[documentID] = entry
+        touch(documentID)
+        while entries.count > capacity, let leastRecentlyUsed = usage.first {
+            usage.removeFirst()
+            entries.removeValue(forKey: leastRecentlyUsed)
+        }
+    }
+
+    private mutating func touch(_ documentID: UUID) {
+        usage.removeAll { $0 == documentID }
+        usage.append(documentID)
+    }
+}

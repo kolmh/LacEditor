@@ -86,15 +86,31 @@ final class DocumentTaskCoordinator: @unchecked Sendable {
     private let lock = NSLock()
     private var generations: [Kind: UInt] = [:]
     private var operations: [Kind: Operation] = [:]
+    private var taskCancellers: [Kind: () -> Void] = [:]
 
     @discardableResult
     func begin(_ kind: Kind, operation: Operation? = nil) -> UInt {
         lock.lock()
         defer { lock.unlock() }
         operations[kind]?.cancel()
+        taskCancellers[kind]?()
+        taskCancellers[kind] = nil
         let generation = (generations[kind] ?? 0) &+ 1
         generations[kind] = generation
         operations[kind] = operation
+        return generation
+    }
+
+    @discardableResult
+    func beginTask(_ kind: Kind, cancel: @escaping () -> Void) -> UInt {
+        lock.lock()
+        defer { lock.unlock() }
+        operations[kind]?.cancel()
+        taskCancellers[kind]?()
+        let generation = (generations[kind] ?? 0) &+ 1
+        generations[kind] = generation
+        operations[kind] = nil
+        taskCancellers[kind] = cancel
         return generation
     }
 
@@ -117,14 +133,19 @@ final class DocumentTaskCoordinator: @unchecked Sendable {
     func finish(_ kind: Kind, generation: UInt) {
         lock.lock()
         defer { lock.unlock() }
-        if generations[kind] == generation { operations[kind] = nil }
+        if generations[kind] == generation {
+            operations[kind] = nil
+            taskCancellers[kind] = nil
+        }
     }
 
     func cancel(_ kind: Kind) {
         lock.lock()
         defer { lock.unlock() }
         operations[kind]?.cancel()
+        taskCancellers[kind]?()
         operations[kind] = nil
+        taskCancellers[kind] = nil
         generations[kind] = (generations[kind] ?? 0) &+ 1
     }
 
@@ -132,7 +153,9 @@ final class DocumentTaskCoordinator: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         operations.values.forEach { $0.cancel() }
+        taskCancellers.values.forEach { $0() }
         operations.removeAll()
+        taskCancellers.removeAll()
         for kind in generations.keys {
             generations[kind] = (generations[kind] ?? 0) &+ 1
         }

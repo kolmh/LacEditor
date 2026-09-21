@@ -141,13 +141,8 @@ enum SidebarPresentation: Equatable {
 
 @MainActor
 final class AppState: ObservableObject {
-    private struct SearchMatchCacheEntry {
-        let key: TextSearchService.CacheKey
-        let matches: [NSRange]
-    }
-
     @Published var documents: [EditorDocument] = []
-    private var searchMatchCache: [UUID: SearchMatchCacheEntry] = [:]
+    private var searchMatchCache = SearchMatchCacheStore()
     @Published var selectedDocumentID: UUID? {
         didSet {
             guard oldValue != selectedDocumentID,
@@ -1388,7 +1383,7 @@ final class AppState: ObservableObject {
         findReplace.activeDocumentID = document.id
         findReplace.message = "正在查找…"
 
-        if let cached = searchMatchCache[document.id], cached.key == cacheKey {
+        if let cached = searchMatchCache.value(for: document.id, key: cacheKey) {
             let range = backwards
                 ? TextSearchService.previousRange(
                     in: cached.matches,
@@ -1408,24 +1403,20 @@ final class AppState: ObservableObject {
             return
         }
 
-        performCancellableDocumentTask(document, kind: .search) { isCancelled in
-            TextSearchService.allRanges(
-                in: source,
-                query: query,
-                caseSensitive: caseSensitive,
-                isCancelled: isCancelled
-            )
-        } completion: { [weak self, weak document] matches in
+        performAsyncSearchTask(
+            document,
+            source: source,
+            query: query,
+            caseSensitive: caseSensitive
+        ) { [weak self, weak document] matches in
             guard let self, let document else { return }
-            self.searchMatchCache[document.id] = SearchMatchCacheEntry(
+            self.searchMatchCache.insert(
+                SearchMatchCacheStore.Entry(
                 key: cacheKey,
                 matches: matches
+                ),
+                for: document.id
             )
-            if self.searchMatchCache.count > 4 {
-                self.searchMatchCache.removeValue(
-                    forKey: self.searchMatchCache.keys.first!
-                )
-            }
             let range = backwards
                 ? TextSearchService.previousRange(
                     in: matches,
@@ -1442,6 +1433,50 @@ final class AppState: ObservableObject {
                 rawQuery: rawQuery,
                 caseSensitive: caseSensitive
             )
+        }
+    }
+
+    private func performAsyncSearchTask(
+        _ document: EditorDocument,
+        source: String,
+        query: String,
+        caseSensitive: Bool,
+        completion: @escaping ([NSRange]) -> Void
+    ) {
+        var task: Task<Void, Never>?
+        let generation = document.taskCoordinator.beginTask(.search) {
+            task?.cancel()
+        }
+        let coordinator = document.taskCoordinator
+        task = Task.detached(priority: .userInitiated) {
+            guard !Task.isCancelled else { return }
+            let signpostID = OSSignpostID(log: taskPerformanceLog)
+            os_signpost(
+                .begin,
+                log: taskPerformanceLog,
+                name: documentTaskSignpostName(for: .search),
+                signpostID: signpostID
+            )
+            let matches = TextSearchService.allRanges(
+                in: source,
+                query: query,
+                caseSensitive: caseSensitive,
+                isCancelled: { Task.isCancelled }
+            )
+            os_signpost(
+                .end,
+                log: taskPerformanceLog,
+                name: documentTaskSignpostName(for: .search),
+                signpostID: signpostID
+            )
+            guard !Task.isCancelled,
+                  coordinator.isCurrent(generation, for: .search) else { return }
+            await MainActor.run {
+                guard !Task.isCancelled,
+                      coordinator.isCurrent(generation, for: .search) else { return }
+                coordinator.finish(.search, generation: generation)
+                completion(matches)
+            }
         }
     }
 

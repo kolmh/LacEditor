@@ -106,6 +106,12 @@ struct TreeSitterJavaScriptBackend: SyntaxParserBackend {
 
         func visit(_ node: Node) {
             if isCancelled() { return }
+            let traversalRange = UTF16TreeRange.range(
+                for: node.byteRange,
+                stringLength: fullRange.length
+            )
+            guard traversalRange.length == 0
+                    || NSIntersectionRange(traversalRange, requested).length > 0 else { return }
             if let nodeType = node.nodeType,
                let kind = tokenKind(for: nodeType) {
                 let nodeRange = UTF16TreeRange.range(
@@ -183,6 +189,12 @@ struct TreeSitterTypeScriptBackend: SyntaxParserBackend {
         var result: [SyntaxHighlighter.Token] = []
         func visit(_ node: Node) {
             if isCancelled() { return }
+            let traversalRange = UTF16TreeRange.range(
+                for: node.byteRange,
+                stringLength: fullRange.length
+            )
+            guard traversalRange.length == 0
+                    || NSIntersectionRange(traversalRange, requested).length > 0 else { return }
             if let nodeType = node.nodeType,
                let kind = Self.tokenKind(for: nodeType) {
                 let nodeRange = UTF16TreeRange.range(
@@ -262,6 +274,12 @@ struct TreeSitterPythonBackend: SyntaxParserBackend {
         var result: [SyntaxHighlighter.Token] = []
         func visit(_ node: Node) {
             if isCancelled() { return }
+            let traversalRange = UTF16TreeRange.range(
+                for: node.byteRange,
+                stringLength: fullRange.length
+            )
+            guard traversalRange.length == 0
+                    || NSIntersectionRange(traversalRange, requested).length > 0 else { return }
             if let nodeType = node.nodeType,
                let kind = Self.tokenKind(for: nodeType) {
                 let nodeRange = UTF16TreeRange.range(
@@ -339,6 +357,12 @@ struct TreeSitterCSSBackend: SyntaxParserBackend {
         var result: [SyntaxHighlighter.Token] = []
         func visit(_ node: Node) {
             if isCancelled() { return }
+            let traversalRange = UTF16TreeRange.range(
+                for: node.byteRange,
+                stringLength: fullRange.length
+            )
+            guard traversalRange.length == 0
+                    || NSIntersectionRange(traversalRange, requested).length > 0 else { return }
             if let nodeType = node.nodeType,
                let kind = Self.tokenKind(for: nodeType) {
                 let nodeRange = UTF16TreeRange.range(
@@ -418,6 +442,12 @@ struct TreeSitterHTMLBackend: SyntaxParserBackend {
         var result: [SyntaxHighlighter.Token] = []
         func visit(_ node: Node) {
             if isCancelled() { return }
+            let traversalRange = UTF16TreeRange.range(
+                for: node.byteRange,
+                stringLength: fullRange.length
+            )
+            guard traversalRange.length == 0
+                    || NSIntersectionRange(traversalRange, requested).length > 0 else { return }
             if let nodeType = node.nodeType,
                let kind = Self.tokenKind(for: nodeType) {
                 let nodeRange = UTF16TreeRange.range(
@@ -632,6 +662,12 @@ struct TreeSitterGenericBackend: SyntaxParserBackend {
         var result: [SyntaxHighlighter.Token] = []
         func visit(_ node: Node) {
             if isCancelled() { return }
+            let traversalRange = UTF16TreeRange.range(
+                for: node.byteRange,
+                stringLength: fullRange.length
+            )
+            guard traversalRange.length == 0
+                    || NSIntersectionRange(traversalRange, requested).length > 0 else { return }
             if let nodeType = node.nodeType,
                let kind = Self.tokenKind(for: nodeType, language: supportedLanguage) {
                 let nodeRange = UTF16TreeRange.range(for: node.byteRange, stringLength: fullRange.length)

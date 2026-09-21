@@ -157,6 +157,7 @@ private struct DocumentEditorPane: View {
                 if document.isPreviewEffectivelyEnabled {
                     MarkdownPreview(
                         markdown: document.text,
+                        revision: document.textRevision,
                         darkMode: darkMode,
                         document: document
                     )
