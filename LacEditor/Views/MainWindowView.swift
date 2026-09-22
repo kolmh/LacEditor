@@ -3,6 +3,7 @@ import UniformTypeIdentifiers
 
 struct MainWindowView: View {
     @EnvironmentObject private var appState: AppState
+    @EnvironmentObject private var windowManager: WindowManager
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isDropTargeted = false
@@ -13,43 +14,16 @@ struct MainWindowView: View {
     )
 
     var body: some View {
-        ZStack(alignment: .leading) {
-            editorWorkspace
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(
-                    .leading,
-                    appState.sidebarPresentation == .pinned
-                        ? LacEditorDesign.sidebarWidth
-                        : 0
-                )
-
-            SidebarView()
-                .frame(width: LacEditorDesign.sidebarWidth)
-                .offset(
-                    x: appState.sidebarPresentation == .hidden
-                        ? -LacEditorDesign.sidebarWidth
-                        : 0
-                )
-                .opacity(appState.sidebarPresentation == .hidden ? 0 : 1)
-                .allowsHitTesting(appState.sidebarPresentation != .hidden)
-                .onHover(perform: appState.sidebarPreviewHoverChanged)
-                .shadow(
-                    color: appState.sidebarPresentation == .preview
-                        ? Color.black.opacity(colorScheme == .dark ? 0.3 : 0.12)
-                        : .clear,
-                    radius: appState.sidebarPresentation == .preview ? 10 : 0,
-                    x: 4
-                )
-                .zIndex(2)
-        }
-        .animation(
-            reduceMotion ? nil : LacEditorDesign.structuralAnimation,
-            value: appState.sidebarPresentation
+        NativeSidebarSplitView(
+            appState: appState,
+            windowManager: windowManager,
+            sidebar: SidebarView(),
+            content: editorWorkspace
         )
+        // AppKit owns the titlebar safe area inside the split view. Constraining
+        // the entire controller below it prevents full-height sidebar material.
+        .ignoresSafeArea(.container, edges: .top)
         .background(Color(nsColor: .lacEditorBackground))
-        .toolbar {
-            LacEditorToolbar()
-        }
         .overlay {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 6)
@@ -83,17 +57,16 @@ struct MainWindowView: View {
     @ViewBuilder
     private var editorWorkspace: some View {
         VStack(spacing: 0) {
+            // Keep tabs in the content hierarchy so the editor split reserves
+            // their height instead of drawing its divider behind an accessory.
             if showsTabBar {
-                VStack(spacing: 0) {
-                    TabBarView()
-                    Divider()
-                }
-                .transition(
-                    reduceMotion
-                        ? .opacity
-                        : .move(edge: .top).combined(with: .opacity)
-                )
+                TabBarView()
+                    .environmentObject(appState)
+                    .environmentObject(windowManager)
+                    .frame(height: LacEditorDesign.tabBarHeight)
+                Divider()
             }
+
             if let selectedDocument = appState.selectedDocument {
                 DocumentEditorPane(
                     document: selectedDocument,
@@ -120,10 +93,6 @@ struct MainWindowView: View {
             }
         }
         .animation(
-            reduceMotion ? nil : LacEditorDesign.chromeAnimation,
-            value: showsTabBar
-        )
-        .animation(
             reduceMotion ? nil : LacEditorDesign.structuralAnimation,
             value: appState.isStatusBarVisible
         )
@@ -131,6 +100,122 @@ struct MainWindowView: View {
 
     private var showsTabBar: Bool {
         appState.documents.count > 1
+    }
+
+}
+
+/// Hosts the editor in AppKit's native sidebar split controller. Keeping the
+/// sidebar as a real split-view item avoids the fragile overlay/offset model:
+/// AppKit owns divider geometry, collapse behavior and window resizing.
+private struct NativeSidebarSplitView: NSViewControllerRepresentable {
+    @ObservedObject var appState: AppState
+    @ObservedObject var windowManager: WindowManager
+    let sidebar: SidebarView
+    let content: AnyView
+
+    init(
+        appState: AppState,
+        windowManager: WindowManager,
+        sidebar: SidebarView,
+        content: some View
+    ) {
+        self.appState = appState
+        self.windowManager = windowManager
+        self.sidebar = sidebar
+        self.content = AnyView(content)
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSViewController(context: Context) -> NSSplitViewController {
+        let controller = NSSplitViewController()
+        let sidebarController = NSHostingController(
+            rootView: AnyView(
+                sidebar
+                    .environmentObject(appState)
+                    .environmentObject(windowManager)
+            )
+        )
+        let contentController = NSHostingController(rootView: content)
+        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebarController)
+        sidebarItem.minimumThickness = 200
+        sidebarItem.maximumThickness = 360
+        sidebarItem.canCollapse = true
+        sidebarItem.canCollapseFromWindowResize = false
+        sidebarItem.allowsFullHeightLayout = true
+        sidebarItem.titlebarSeparatorStyle = .none
+        let contentItem = NSSplitViewItem(viewController: contentController)
+        contentItem.minimumThickness = 420
+        controller.addSplitViewItem(sidebarItem)
+        controller.addSplitViewItem(contentItem)
+        controller.splitView.dividerStyle = .thin
+        controller.splitView.isVertical = true
+        controller.view.wantsLayer = true
+        controller.view.layer?.backgroundColor = NSColor.lacEditorBackground.cgColor
+        DispatchQueue.main.async { [weak controller] in
+            guard let controller else { return }
+            controller.splitView.setPosition(
+                LacEditorDesign.sidebarWidth,
+                ofDividerAt: 0
+            )
+        }
+
+        context.coordinator.sidebarController = sidebarController
+        context.coordinator.contentController = contentController
+        context.coordinator.sidebarItem = sidebarItem
+        context.coordinator.applyCollapseState(
+            isVisible: appState.isSidebarVisible
+        )
+        context.coordinator.observeCollapseState(appState: appState)
+        return controller
+    }
+
+    func updateNSViewController(
+        _ controller: NSSplitViewController,
+        context: Context
+    ) {
+        context.coordinator.sidebarController?.rootView = AnyView(
+            sidebar
+                .environmentObject(appState)
+                .environmentObject(windowManager)
+        )
+        context.coordinator.contentController?.rootView = content
+        context.coordinator.applyCollapseState(
+            isVisible: appState.isSidebarVisible
+        )
+    }
+
+    final class Coordinator {
+        var sidebarController: NSHostingController<AnyView>?
+        var contentController: NSHostingController<AnyView>?
+        weak var sidebarItem: NSSplitViewItem?
+        private var collapseObservation: NSKeyValueObservation?
+        private var isApplyingCollapseState = false
+
+        func observeCollapseState(appState: AppState) {
+            // The system toolbar button changes NSSplitViewItem directly.
+            // Reflect that change before SwiftUI next reconciles the layout.
+            collapseObservation = sidebarItem?.observe(\.isCollapsed, options: [.new]) {
+                [weak self, weak appState] item, _ in
+                MainActor.assumeIsolated {
+                    guard let self, let appState, !self.isApplyingCollapseState else { return }
+                    let isVisible = !item.isCollapsed
+                    if appState.isSidebarVisible != isVisible {
+                        appState.isSidebarVisible = isVisible
+                    }
+                }
+            }
+        }
+
+        func applyCollapseState(isVisible: Bool) {
+            guard let sidebarItem else { return }
+            if sidebarItem.isCollapsed == !isVisible { return }
+            isApplyingCollapseState = true
+            sidebarItem.isCollapsed = !isVisible
+            isApplyingCollapseState = false
+        }
     }
 
 }

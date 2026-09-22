@@ -17,6 +17,24 @@ enum EditorLanguage: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var displayName: String {
+        switch self {
+        case .plainText: "纯文本"
+        case .markdown: "Markdown"
+        case .json: "JSON"
+        case .html: "HTML"
+        case .javascript: "JavaScript"
+        case .typescript: "TypeScript"
+        case .css: "CSS"
+        case .python: "Python"
+        case .swift: "Swift"
+        case .shell: "Shell"
+        case .yaml: "YAML"
+        case .cFamily: "C / C++"
+        case .sql: "SQL"
+        }
+    }
+
     var icon: String {
         switch self {
         case .plainText: "doc.plaintext"

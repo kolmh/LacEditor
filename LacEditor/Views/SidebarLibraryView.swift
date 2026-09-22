@@ -10,87 +10,84 @@ struct SidebarLibraryView: View {
     @State private var hoveredSection: SidebarLibrarySection?
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    sidebarSection(
-                        title: "收藏夹",
-                        section: .favorites,
-                        count: library.favoriteURLs.count
-                    ) {
-                        if library.favoriteURLs.isEmpty {
-                            Text("可从文件右键菜单添加收藏")
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.leading, 30)
-                                .frame(height: 25)
-                        } else {
-                            fileList(
-                                urls: library.favoriteURLs,
-                                location: .favorites
-                            )
-                        }
-                    }
+        ScrollView(.vertical) {
+            LazyVStack(alignment: .leading, spacing: 6) {
+            sidebarSection(
+                title: "收藏夹",
+                section: .favorites,
+                count: library.favoriteURLs.count
+            ) {
+                if library.favoriteURLs.isEmpty {
+                    Text("可从文件右键菜单添加收藏")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 30)
+                        .frame(height: 25)
+                } else {
+                    fileList(urls: library.favoriteURLs, location: .favorites)
+                }
+            }
 
-                    sidebarSection(
-                        title: "分组",
-                        section: .groups,
-                        count: library.groups.count
-                    ) {
-                        if library.groups.isEmpty {
-                            Button("新建分组") {
-                                windowManager.requestCreateSidebarGroup()
-                            }
-                            .buttonStyle(.plain)
+            sidebarSection(
+                title: "分组",
+                section: .groups,
+                count: library.groups.count
+            ) {
+                if library.groups.isEmpty {
+                    Button("新建分组") {
+                        windowManager.requestCreateSidebarGroup()
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.leading, 30)
+                    .frame(height: 26)
+                } else {
+                    ForEach(library.groups) { group in
+                        SidebarGroupView(group: group, library: library)
+                    }
+                    Color.clear
+                        .frame(height: 5)
+                        .onDrop(
+                            of: SidebarDragPayload.supportedTypes,
+                            delegate: SidebarGroupDropDelegate(
+                                targetGroupID: nil,
+                                library: library
+                            )
+                        )
+                }
+            }
+
+            sidebarSection(
+                title: "最近文件",
+                section: .recent,
+                count: recentFiles.urls.count
+            ) {
+                if recentFiles.urls.isEmpty {
+                    VStack(spacing: 7) {
+                        Text("暂无最近文件")
                             .font(.system(size: 11))
                             .foregroundStyle(.tertiary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.leading, 30)
-                            .frame(height: 26)
-                        } else {
-                            ForEach(library.groups) { group in
-                                SidebarGroupView(group: group, library: library)
-                            }
-                            Color.clear
-                                .frame(height: 5)
-                                .onDrop(
-                                    of: SidebarDragPayload.supportedTypes,
-                                    delegate: SidebarGroupDropDelegate(
-                                        targetGroupID: nil,
-                                        library: library
-                                    )
-                                )
+                        Button("打开文件…") {
+                            appState.openFiles()
                         }
+                        .controlSize(.small)
                     }
-
-                    sidebarSection(
-                        title: "最近文件",
-                        section: .recent,
-                        count: recentFiles.urls.count
-                    ) {
-                        if recentFiles.urls.isEmpty {
-                            VStack(spacing: 7) {
-                                Text("暂无最近文件")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
-                                Button("打开文件…") {
-                                    appState.openFiles()
-                                }
-                                .controlSize(.small)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                        } else {
-                            fileList(urls: recentFiles.urls, location: .recent)
-                        }
-                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                } else {
+                    fileList(urls: recentFiles.urls, location: .recent)
                 }
-                .padding(.horizontal, 6)
-                .padding(.top, 8)
-                .padding(.bottom, 8)
             }
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
         }
+        .scrollIndicators(.automatic)
+        .scrollContentBackground(.hidden)
+        .background(NativeScrollViewConfigurator())
     }
 
     @ViewBuilder
@@ -105,7 +102,7 @@ struct SidebarLibraryView: View {
         VStack(spacing: 2) {
             HStack(spacing: 6) {
                 Button {
-                    withAnimation(.easeInOut(duration: 0.14)) {
+                    withAnimation(LacEditorDesign.sidebarDisclosureAnimation) {
                         library.setExpanded(!isExpanded, for: section)
                     }
                 } label: {
@@ -150,9 +147,9 @@ struct SidebarLibraryView: View {
 
             if isExpanded {
                 content()
-                    .transition(.sidebarVerticalReveal)
             }
         }
+        .animation(LacEditorDesign.sidebarDisclosureAnimation, value: isExpanded)
         .clipped()
     }
 
@@ -200,7 +197,7 @@ private struct SidebarGroupView: View {
     var body: some View {
         VStack(spacing: 2) {
             Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
+                withAnimation(LacEditorDesign.sidebarDisclosureAnimation) {
                     library.setExpanded(!group.isExpanded, for: group.id)
                 }
             } label: {
@@ -284,42 +281,10 @@ private struct SidebarGroupView: View {
                             )
                         )
                 }
-                .transition(.sidebarVerticalReveal)
             }
         }
+        .animation(LacEditorDesign.sidebarDisclosureAnimation, value: group.isExpanded)
         .clipped()
-        .animation(.easeInOut(duration: 0.16), value: group.isExpanded)
-    }
-}
-
-private struct SidebarVerticalRevealModifier: ViewModifier, Animatable {
-    var progress: CGFloat
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func body(content: Content) -> some View {
-        content.mask(alignment: .top) {
-            GeometryReader { proxy in
-                Rectangle()
-                    .frame(
-                        width: proxy.size.width,
-                        height: max(0, proxy.size.height * progress),
-                        alignment: .top
-                    )
-            }
-        }
-    }
-}
-
-private extension AnyTransition {
-    static var sidebarVerticalReveal: AnyTransition {
-        .modifier(
-            active: SidebarVerticalRevealModifier(progress: 0),
-            identity: SidebarVerticalRevealModifier(progress: 1)
-        )
     }
 }
 

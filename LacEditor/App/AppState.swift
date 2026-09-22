@@ -164,9 +164,6 @@ final class AppState: ObservableObject {
             )
         }
     }
-    @Published private(set) var isSidebarPreviewVisible = false
-    private var isSidebarToggleHovered = false
-    private var isSidebarPreviewHovered = false
     var isWordWrapEnabled: Bool {
         get { preferences.wordWrapEnabled }
         set { preferences.wordWrapEnabled = newValue }
@@ -242,7 +239,6 @@ final class AppState: ObservableObject {
     private var openingFileURLs: Set<URL> = []
     private var openingOperations: [URL: Operation] = [:]
     private var cancelledOpeningURLs: Set<URL> = []
-    private var sidebarPreviewDismissWorkItem: DispatchWorkItem?
     private var contentChangeObserver: NSObjectProtocol?
     private var preferencesCancellable: AnyCancellable?
     private let recoveryStore: DocumentRecoveryStore?
@@ -358,69 +354,11 @@ final class AppState: ObservableObject {
     }
 
     var sidebarPresentation: SidebarPresentation {
-        if isSidebarVisible { return .pinned }
-        if isSidebarPreviewVisible { return .preview }
-        return .hidden
+        isSidebarVisible ? .pinned : .hidden
     }
 
     func toggleSidebar() {
-        sidebarPreviewDismissWorkItem?.cancel()
-        sidebarPreviewDismissWorkItem = nil
-        isSidebarPreviewHovered = false
-        if isSidebarPreviewVisible {
-            isSidebarVisible = true
-            isSidebarPreviewVisible = false
-            return
-        }
         isSidebarVisible.toggle()
-        isSidebarPreviewVisible = false
-    }
-
-    func sidebarToggleHoverChanged(_ isHovering: Bool) {
-        isSidebarToggleHovered = isHovering
-        guard !isSidebarVisible else {
-            isSidebarPreviewVisible = false
-            return
-        }
-
-        sidebarPreviewDismissWorkItem?.cancel()
-        sidebarPreviewDismissWorkItem = nil
-        if isHovering {
-            withAnimation(.easeOut(duration: 0.16)) {
-                isSidebarPreviewVisible = true
-            }
-        } else if !isSidebarPreviewHovered {
-            scheduleSidebarPreviewDismissal()
-        }
-    }
-
-    func sidebarPreviewHoverChanged(_ isHovering: Bool) {
-        guard !isSidebarVisible, isSidebarPreviewVisible else {
-            isSidebarPreviewHovered = false
-            return
-        }
-        isSidebarPreviewHovered = isHovering
-
-        sidebarPreviewDismissWorkItem?.cancel()
-        sidebarPreviewDismissWorkItem = nil
-        if !isHovering, !isSidebarToggleHovered {
-            scheduleSidebarPreviewDismissal()
-        }
-    }
-
-    private func scheduleSidebarPreviewDismissal() {
-        sidebarPreviewDismissWorkItem?.cancel()
-        let workItem = DispatchWorkItem { [weak self] in
-            guard let self,
-                  !self.isSidebarVisible,
-                  !self.isSidebarToggleHovered,
-                  !self.isSidebarPreviewHovered else { return }
-            withAnimation(.easeOut(duration: 0.14)) {
-                self.isSidebarPreviewVisible = false
-            }
-        }
-        sidebarPreviewDismissWorkItem = workItem
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22, execute: workItem)
     }
 
     func newDocument() {

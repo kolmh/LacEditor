@@ -37,24 +37,15 @@ struct LacEditorApp: App {
                 windowID: primaryWindowID
             )
         }
-        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
         .defaultSize(width: 1120, height: 720)
         .commands {
             LacEditorCommands(windowManager: windowManager)
         }
 
-        Settings {
-            SettingsHostView(
-                fallbackState: appState,
-                windowManager: windowManager
-            )
-        }
-        .defaultSize(width: 540, height: 570)
-        .windowResizability(.contentSize)
     }
 }
 
-private struct SettingsHostView: View {
+struct SettingsHostView: View {
     @ObservedObject var fallbackState: AppState
     @ObservedObject var windowManager: WindowManager
 
@@ -73,6 +64,61 @@ private struct SettingsHostView: View {
                     systemAppearanceDidChange: targetState.refreshSystemAppearance
                 )
             )
+    }
+}
+
+/// Presents settings as a normal, non-modal macOS utility window. A sidebar
+/// hosted inside NSSplitViewController does not always inherit SwiftUI's
+/// `openSettings` action, which can create a Settings scene behind the editor
+/// and immediately return focus to the main window. Keeping one explicit
+/// controller makes the button deterministic and keeps the window in front.
+@MainActor
+final class SettingsWindowController: NSObject, NSWindowDelegate {
+    static let shared = SettingsWindowController()
+
+    private var windowController: NSWindowController?
+
+    func present(windowManager: WindowManager) {
+        guard let state = windowManager.activeState else { return }
+
+        if let window = windowController?.window {
+            window.contentViewController = NSHostingController(
+                rootView: SettingsHostView(
+                    fallbackState: state,
+                    windowManager: windowManager
+                )
+            )
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 540, height: 570),
+            styleMask: [.titled, .closable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "设置"
+        window.contentViewController = NSHostingController(
+            rootView: SettingsHostView(
+                fallbackState: state,
+                windowManager: windowManager
+            )
+        )
+        window.minSize = NSSize(width: 500, height: 420)
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+        let controller = NSWindowController(window: window)
+        windowController = controller
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        windowController = nil
     }
 }
 
@@ -165,6 +211,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forEventClass: AEEventClass(kCoreEventClass),
             andEventID: AEEventID(kAEOpenDocuments)
         )
+        // SwiftUI installs its command menus during scene construction, which
+        // happens after WindowManager is initialized. Translate once again at
+        // the AppKit launch boundary and after the scene has had a run-loop
+        // turn to create the menu hierarchy.
+        DispatchQueue.main.async {
+            MenuLocalizationController.localizeMainMenu()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                MenuLocalizationController.localizeMainMenu()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -188,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hasVisibleWindows flag: Bool
     ) -> Bool {
         if !flag {
-            Self.sharedManager?.activeState?.hostWindow?.makeKeyAndOrderFront(nil)
+            Self.sharedManager?.reopenPrimaryWindow()
         }
         return true
     }
@@ -198,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationOpenUntitledFile(_ sender: NSApplication) -> Bool {
-        Self.sharedManager?.activeState?.hostWindow?.makeKeyAndOrderFront(nil)
+        Self.sharedManager?.reopenPrimaryWindow()
         return true
     }
 
@@ -239,6 +295,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidResignActive(_ notification: Notification) {
         Self.sharedManager?.persistRecoverySnapshotsImmediately()
+    }
+
+    func applicationDidBecomeActive(_ notification: Notification) {
+        // The SwiftUI command tree can be rebuilt when the first window is
+        // activated. Re-apply the visible top-level labels after that rebuild.
+        MenuLocalizationController.localizeMainMenu()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            MenuLocalizationController.localizeMainMenu()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            MenuLocalizationController.localizeMainMenu()
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -343,6 +411,72 @@ final class AppearanceMenuController: NSObject {
     }
 }
 
+/// SwiftUI's standard command groups inherit the system's English menu names
+/// when the app has no localization bundle. Keep the command implementation
+/// intact and translate only the visible top-level menu labels.
+@MainActor
+final class MenuLocalizationController: NSObject {
+    private var observer: NSObjectProtocol?
+    private var localizationAttempts = 0
+
+    override init() {
+        super.init()
+        observer = NotificationCenter.default.addObserver(
+            forName: NSMenu.didBeginTrackingNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard self != nil else { return }
+                Self.localizeMainMenu()
+                // SwiftUI may refresh the command hierarchy immediately when
+                // tracking starts. Apply one more pass after that refresh.
+                DispatchQueue.main.async {
+                    Self.localizeMainMenu()
+                }
+            }
+        }
+        // SwiftUI creates the command menu after the App initializer returns.
+        // Retry briefly after launch so the native menu is translated after it
+        // actually exists, rather than relying on a single early pass.
+        scheduleLocalizationPass()
+    }
+
+    deinit {
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    static func localizeMainMenu() {
+        guard let menu = NSApp.mainMenu else { return }
+        let translations = [
+            "File": "文件",
+            "Edit": "编辑",
+            "View": "显示",
+            "Window": "窗口",
+            "Help": "帮助"
+        ]
+        for item in menu.items {
+            if let translated = translations[item.title] {
+                item.title = translated
+            }
+        }
+    }
+
+    private func scheduleLocalizationPass() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            Self.localizeMainMenu()
+            self.localizationAttempts += 1
+            if self.localizationAttempts < 40 {
+                try? await Task.sleep(for: .milliseconds(100))
+                self.scheduleLocalizationPass()
+            }
+        }
+    }
+}
+
 struct WindowCloseCoordinator: NSViewRepresentable {
     let appState: AppState
     let windowManager: WindowManager
@@ -363,9 +497,13 @@ struct WindowCloseCoordinator: NSViewRepresentable {
             context.coordinator.previousDelegate = window.delegate
             window.delegate = context.coordinator
             window.title = appState.windowTitle
-            configureEditorWindowChrome(window)
+            configureEditorWindowChrome(window, appState: appState)
             windowManager.register(windowID: windowID, state: appState, window: window)
             context.coordinator.scheduleChromeUpdate(for: window)
+            MenuLocalizationController.localizeMainMenu()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                MenuLocalizationController.localizeMainMenu()
+            }
         }
         return view
     }
@@ -373,7 +511,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         nsView.window?.title = appState.windowTitle
         if let window = nsView.window {
-            configureEditorWindowChrome(window)
+            configureEditorWindowChrome(window, appState: appState)
             context.coordinator.scheduleChromeUpdate(for: window)
         }
         if let window = nsView.window, appState.hostWindow !== window {
@@ -405,7 +543,7 @@ struct WindowCloseCoordinator: NSViewRepresentable {
             let workItem = DispatchWorkItem { [weak window] in
                 MainActor.assumeIsolated {
                     guard let window else { return }
-                    configureEditorWindowChrome(window)
+                    configureEditorWindowChrome(window, appState: self.appState)
                 }
             }
             chromeWorkItem = workItem
@@ -449,6 +587,16 @@ struct WindowCloseCoordinator: NSViewRepresentable {
         }
 
         func windowDidBecomeKey(_ notification: Notification) {
+            // A SwiftUI Window scene may be reopened from the Dock after it
+            // was closed. Rebind the existing session before activating it so
+            // menu commands and sidebar state target this window again.
+            if let window = notification.object as? NSWindow {
+                windowManager.register(
+                    windowID: windowID,
+                    state: appState,
+                    window: window
+                )
+            }
             windowManager.activate(windowID: windowID)
             previousDelegate?.windowDidBecomeKey?(notification)
         }
@@ -461,10 +609,20 @@ struct WindowCloseCoordinator: NSViewRepresentable {
 }
 
 @MainActor
-func configureEditorWindowChrome(_ window: NSWindow) {
+func configureEditorWindowChrome(_ window: NSWindow, appState: AppState? = nil) {
+    // This is the same structure used by Finder: the native split sidebar is
+    // allowed to extend through the titlebar, while one compact AppKit toolbar
+    // owns every titlebar control and tracks the split-view divider.
     window.styleMask.insert(.fullSizeContentView)
-    window.toolbarStyle = .unifiedCompact
+    window.toolbarStyle = .unified
     window.titleVisibility = .hidden
+    // Let the native full-height sidebar material continue behind the
+    // traffic-light/titlebar area, as it does in Finder.
     window.titlebarAppearsTransparent = true
-    window.backgroundColor = .lacEditorBackground
+    window.backgroundColor = .windowBackgroundColor
+    window.titlebarSeparatorStyle = .none
+
+    if let appState {
+        configureEditorWindowToolbar(window, appState: appState)
+    }
 }

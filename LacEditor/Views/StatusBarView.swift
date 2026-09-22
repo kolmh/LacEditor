@@ -39,7 +39,7 @@ struct StatusBarView: View {
             }
             Spacer(minLength: 12)
             statusItem(document.encodingName)
-            statusItem(document.language.rawValue)
+            statusItem(document.language.displayName)
             statusItem(
                 document.isWordCountEnabled
                     ? "字数：\(document.wordCount)"

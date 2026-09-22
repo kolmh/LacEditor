@@ -189,7 +189,6 @@ struct TabBarView: View {
                     }
                 }
             }
-
             Button {
                 appState.newDocument()
             } label: {
@@ -214,7 +213,13 @@ struct TabBarView: View {
         }
         .coordinateSpace(name: "tabBar")
         .frame(height: barHeight)
-        .background(Color(nsColor: .lacEditorBackground))
+        .background(Color(nsColor: .controlBackgroundColor))
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color(nsColor: .separatorColor).opacity(0.42))
+                .frame(height: 0.5)
+                .allowsHitTesting(false)
+        }
     }
 
     private func tabWidth(in availableWidth: CGFloat) -> CGFloat {
@@ -300,12 +305,20 @@ private struct EditorTabView: View {
         HStack(spacing: 6) {
             Image(systemName: document.language.icon)
                 .font(.system(size: 11))
-                .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                .foregroundStyle(
+                    isSelected
+                        ? Color(nsColor: .controlAccentColor)
+                        : Color(nsColor: .secondaryLabelColor)
+                )
                 .frame(width: 14, height: 14)
 
             Text(document.displayName)
                 .font(.system(size: 12, weight: isSelected ? .medium : .regular))
-                .foregroundStyle(isSelected ? .primary : .secondary)
+                .foregroundStyle(
+                    isSelected
+                        ? Color(nsColor: .labelColor)
+                        : Color(nsColor: .secondaryLabelColor)
+                )
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(maxWidth: .infinity)

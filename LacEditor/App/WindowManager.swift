@@ -15,6 +15,10 @@ final class WindowManager: ObservableObject {
     let workspaceStore: WorkspaceSessionStore?
     @Published private(set) var activeState: AppState?
     @Published private(set) var draggedDocumentID: UUID?
+    /// Changes whenever the retained primary scene is reopened. Sidebar
+    /// scroll views use this identity to discard stale content offsets from a
+    /// window that was closed after its last tab was removed.
+    @Published private(set) var primaryReopenGeneration = 0
     private(set) var terminationApproved = false
 
     private final class ActiveTabDrag {
@@ -32,6 +36,10 @@ final class WindowManager: ObservableObject {
 
     private var states: [UUID: AppState] = [:]
     private var windowControllers: [UUID: NSWindowController] = [:]
+    // SwiftUI's primary Window scene can be closed and later reopened from
+    // the Dock without recreating its AppState. Keep that state registered so
+    // commands and sidebar bindings become active again when the scene returns.
+    private var primaryWindowID: UUID?
     private var transferringDocumentIDs: Set<UUID> = []
     private var activeTabDrag: ActiveTabDrag?
     private var isConfirmingRecentFilesClear = false
@@ -53,6 +61,7 @@ final class WindowManager: ObservableObject {
     private lazy var appearanceMenuController = AppearanceMenuController(
         windowManager: self
     )
+    private lazy var menuLocalizationController = MenuLocalizationController()
 
     init(
         recoveryStore: DocumentRecoveryStore? = nil,
@@ -74,6 +83,7 @@ final class WindowManager: ObservableObject {
             self?.objectWillChange.send()
         }
         _ = appearanceMenuController
+        _ = menuLocalizationController
     }
 
     func takeRecoveredDocuments() -> [EditorDocument] {
@@ -86,9 +96,18 @@ final class WindowManager: ObservableObject {
     }
 
     func register(windowID: UUID, state: AppState, window: NSWindow) {
+        let wasDetachedPrimaryWindow = windowID == primaryWindowID
+            && state.hostWindow !== window
+            && (state.hostWindow == nil || state.hostWindow?.isVisible == false)
+        if primaryWindowID == nil {
+            primaryWindowID = windowID
+        }
         states[windowID] = state
         state.windowManager = self
         state.hostWindow = window
+        if wasDetachedPrimaryWindow {
+            primaryReopenGeneration &+= 1
+        }
         if window.isKeyWindow || activeState == nil {
             activate(windowID: windowID)
         }
@@ -139,12 +158,43 @@ final class WindowManager: ObservableObject {
     }
 
     func unregister(windowID: UUID) {
+        guard let state = states[windowID] else { return }
+        state.closeAuxiliaryWindows()
+
+        // The primary SwiftUI scene is reusable after its last tab closes.
+        // Removing it here leaves the reopened window with visible content but
+        // no active AppState, which disables Command+T/Command+W and blanks the
+        // sidebar. Secondary native windows still leave the manager normally.
+        if windowID == primaryWindowID {
+            // SwiftUI commonly reuses this NSWindow when the app is reopened
+            // from the Dock. Keep the weak reference so the reopen handler can
+            // bring the existing workspace back instead of losing its route.
+            activeState = states.values.first(where: {
+                $0 !== state && $0.hostWindow?.isVisible == true
+            }) ?? state
+            return
+        }
+
         let removedState = states.removeValue(forKey: windowID)
-        removedState?.closeAuxiliaryWindows()
         windowControllers.removeValue(forKey: windowID)
         if activeState === removedState {
-            activeState = states.values.first
+            activeState = states.values.first(where: {
+                $0.hostWindow?.isVisible == true
+            })
         }
+    }
+
+    /// Re-show the retained primary SwiftUI scene after the last editor
+    /// window was closed and the application was reopened from the Dock.
+    func reopenPrimaryWindow() {
+        guard let primaryWindowID,
+              let state = states[primaryWindowID],
+              let window = state.hostWindow else { return }
+        primaryReopenGeneration &+= 1
+        register(windowID: primaryWindowID, state: state, window: window)
+        activate(windowID: primaryWindowID)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @discardableResult

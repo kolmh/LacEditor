@@ -1,9 +1,87 @@
 import AppKit
+import SwiftUI
 import XCTest
 @testable import LacEditor
 
 @MainActor
 final class WindowAndSessionTests: XCTestCase {
+    func testFullHeightSidebarAndTabAccessorySurviveResizeAndNativeCollapse() async throws {
+        _ = NSApplication.shared
+        let manager = WindowManager()
+        let state = makeState(document: EditorDocument(text: "first"))
+        let originalVisibility = state.isSidebarVisible
+        state.isSidebarVisible = true
+        state.newDocument()
+        let windowID = UUID()
+        let window = makeWindow(title: "Chrome regression")
+        window.contentViewController = NSHostingController(rootView: EditorWindowRoot(
+            appState: state, windowManager: manager, windowID: windowID
+        ))
+        defer {
+            state.isSidebarVisible = originalVisibility
+            window.orderOut(nil)
+            window.contentViewController = nil
+            window.close()
+        }
+        window.orderFront(nil)
+        try await Task.sleep(for: .milliseconds(150))
+
+        func findSplit(_ view: NSView) -> NSSplitViewController? {
+            if let split = view as? NSSplitView,
+               let controller = split.delegate as? NSSplitViewController,
+               controller.splitViewItems.first?.behavior == .sidebar { return controller }
+            return view.subviews.lazy.compactMap(findSplit).first
+        }
+        let contentView = try XCTUnwrap(window.contentView)
+        let split = try XCTUnwrap(findSplit(contentView))
+        let sidebar = split.splitViewItems[0]
+        let accessory = try XCTUnwrap(split.splitViewItems[1].topAlignedAccessoryViewControllers.first)
+        for size in [NSSize(width: 900, height: 560), NSSize(width: 1120, height: 720)] {
+            window.setContentSize(size)
+            try await Task.sleep(for: .milliseconds(100))
+            contentView.layoutSubtreeIfNeeded()
+            XCTAssertEqual(split.view.convert(split.view.bounds, to: nil).maxY,
+                           contentView.convert(contentView.bounds, to: nil).maxY, accuracy: 1,
+                           "The split view must reach behind the titlebar")
+            XCTAssertFalse(accessory.isHidden)
+            XCTAssertGreaterThan(accessory.view.visibleRect.width, 200)
+            XCTAssertGreaterThan(accessory.view.visibleRect.height, 20)
+            XCTAssertEqual(accessory.view.safeAreaInsets.top, 0, accuracy: 1)
+        }
+        sidebar.isCollapsed = true // Same entry point as AppKit's toolbar button.
+        XCTAssertFalse(state.isSidebarVisible)
+        state.newDocument()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(sidebar.isCollapsed, "Document updates must not reopen the sidebar")
+        state.toggleSidebar()
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(sidebar.isCollapsed)
+    }
+
+    func testPrimaryWindowSessionCanRebindAfterCloseAndReopen() {
+        _ = NSApplication.shared
+        let manager = WindowManager()
+        let state = makeState(document: EditorDocument(text: "kept"))
+        let windowID = UUID()
+        let firstWindow = makeWindow(title: "Primary")
+        manager.register(windowID: windowID, state: state, window: firstWindow)
+
+        manager.unregister(windowID: windowID)
+        XCTAssertTrue(manager.activeState === state)
+
+        let reopenedWindow = makeWindow(title: "Primary Reopened")
+        defer {
+            manager.unregister(windowID: windowID)
+            firstWindow.close()
+            reopenedWindow.close()
+        }
+        manager.register(windowID: windowID, state: state, window: reopenedWindow)
+
+        XCTAssertTrue(manager.activeState === state)
+        XCTAssertTrue(state.hostWindow === reopenedWindow)
+        XCTAssertEqual(state.selectedDocument?.text, "kept")
+    }
+
     func testPreservedWorkspaceRestoresTabOrderAndDirtyState() async throws {
         _ = NSApplication.shared
         let directory = FileManager.default.temporaryDirectory

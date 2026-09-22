@@ -5,8 +5,6 @@ import UniformTypeIdentifiers
 struct SidebarView: View {
     @EnvironmentObject private var appState: AppState
     @EnvironmentObject private var windowManager: WindowManager
-    @Environment(\.openSettings) private var openSettings
-    @Environment(\.colorScheme) private var colorScheme
     @State private var isSettingsHovering = false
 
     var body: some View {
@@ -15,12 +13,13 @@ struct SidebarView: View {
                 recentFiles: appState.recentFiles,
                 library: windowManager.sidebarLibrary
             )
+            .id(windowManager.primaryReopenGeneration)
 
             Divider()
                 .opacity(0.45)
 
             Button {
-                openSettings()
+                SettingsWindowController.shared.present(windowManager: windowManager)
             } label: {
                 Label("设置", systemImage: "gearshape")
                     .font(.system(size: 12))
@@ -40,23 +39,6 @@ struct SidebarView: View {
             .padding(.vertical, 3)
             .onHover { isSettingsHovering = $0 }
         }
-        .background {
-            ZStack {
-                LacSidebarMaterial()
-                Color(nsColor: .lacEditorBackground)
-                    .opacity(colorScheme == .dark ? 0.12 : 0.22)
-            }
-            .ignoresSafeArea()
-        }
-        .overlay(alignment: .trailing) {
-            Rectangle()
-                .fill(
-                    Color(nsColor: .separatorColor)
-                        .opacity(colorScheme == .dark ? 0.58 : 0.46)
-                )
-                .frame(width: 1)
-                .ignoresSafeArea(.container, edges: .vertical)
-                .allowsHitTesting(false)
-        }
+        .background(SidebarMaterialBackground())
     }
 }

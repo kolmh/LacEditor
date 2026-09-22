@@ -13,6 +13,15 @@ struct LacEditorCommands: Commands {
     }
 
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button {
+                SettingsWindowController.shared.present(windowManager: windowManager)
+            } label: {
+                Label("设置…", systemImage: "gearshape")
+            }
+            .keyboardShortcut(",", modifiers: .command)
+        }
+
         CommandGroup(replacing: .newItem) {
             Button {
                 windowManager.openNewWindow()
@@ -89,6 +98,16 @@ struct LacEditorCommands: Commands {
         }
 
         CommandGroup(after: .pasteboard) {
+            Button {
+                appState?.toggleSidebar()
+            } label: {
+                Label(
+                    appState?.isSidebarVisible == true ? "隐藏侧边栏" : "显示侧边栏",
+                    systemImage: "sidebar.left"
+                )
+            }
+            .keyboardShortcut("b", modifiers: [.command, .control])
+            .disabled(appState == nil)
             Divider()
             Button {
                 appState?.presentFindReplace(mode: .find)
@@ -166,18 +185,12 @@ struct LacEditorCommands: Commands {
                 .disabled(appState == nil)
         }
 
-        CommandGroup(replacing: .sidebar) {
-            Button {
-                appState?.toggleSidebar()
-            } label: {
-                Label(
-                    appState?.isSidebarVisible == true ? "隐藏侧边栏" : "显示侧边栏",
-                    systemImage: "sidebar.left"
-                )
-            }
-            .keyboardShortcut("b", modifiers: [.command, .control])
-            .disabled(appState == nil)
+        // Suppress SwiftUI's automatic sidebar titlebar control. macOS 26
+        // renders it as an accent-colored capsule; LacEditor owns a native
+        // AppKit button beside the traffic lights instead.
+        CommandGroup(replacing: .sidebar) {}
 
+        CommandGroup(after: .toolbar) {
             Button {
                 appState?.togglePreview()
             } label: {

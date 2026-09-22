@@ -4,6 +4,7 @@ import PackageDescription
 
 let package = Package(
     name: "LacEditor",
+    defaultLocalization: "zh-Hans",
     platforms: [
         .macOS("26.0")
     ],

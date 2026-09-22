@@ -37,6 +37,7 @@
 		A0000000000000000000011A /* StableToolTip.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001A /* StableToolTip.swift */; };
 		A0000000000000000000011B /* WindowManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001B /* WindowManager.swift */; };
 		A0000000000000000000011C /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0000000000000000000001C /* Assets.xcassets */; };
+		A00000000000000000000144 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000038 /* Localizable.strings */; };
 		A00000000000000000000121 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000021 /* AppKit.framework */; };
 		A00000000000000000000122 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000022 /* SwiftUI.framework */; };
 		A00000000000000000000123 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A00000000000000000000023 /* WebKit.framework */; };
@@ -123,6 +124,7 @@
 		A00000000000000000000037 /* SyntaxParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyntaxParser.swift; sourceTree = "<group>"; };
 		A00000000000000000000035 /* DocumentRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DocumentRecoveryStore.swift; sourceTree = "<group>"; };
 		A00000000000000000000036 /* WorkspaceSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSessionStore.swift; sourceTree = "<group>"; };
+		A00000000000000000000038 /* Localizable.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = Localizable.strings; path = zh-Hans.lproj/Localizable.strings; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -173,6 +175,7 @@
 				A00000000000000000000306 /* Preview */,
 				A00000000000000000000307 /* Views */,
 				A0000000000000000000001C /* Assets.xcassets */,
+				A00000000000000000000038 /* Localizable.strings */,
 			);
 			path = LacEditor;
 			sourceTree = "<group>";
@@ -266,6 +269,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A0000000000000000000011C /* Assets.xcassets in Resources */,
+				A00000000000000000000144 /* Localizable.strings in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -413,7 +417,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 45;
+				CURRENT_PROJECT_VERSION = 58;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -424,7 +428,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.13.6;
+				MARKETING_VERSION = 0.13.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -440,7 +444,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 45;
+				CURRENT_PROJECT_VERSION = 58;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -451,7 +455,7 @@
 				LD_RUNPATH_SEARCH_PATHS = "@executable_path/../Frameworks";
 				ARCHS = arm64;
 				MACOSX_DEPLOYMENT_TARGET = 26.0;
-				MARKETING_VERSION = 0.13.6;
+				MARKETING_VERSION = 0.13.18;
 				PRODUCT_BUNDLE_IDENTIFIER = com.laceditor.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_COMPILATION_MODE = wholemodule;

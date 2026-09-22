@@ -220,7 +220,7 @@ final class FileService {
         if encoding == gb18030Encoding { return "简体中文（GB 18030）" }
         if encoding == .isoLatin1 { return "西欧（ISO Latin 1）" }
         if encoding == .windowsCP1252 { return "西欧（Windows Latin 1）" }
-        if encoding == .macOSRoman { return "Mac OS Roman" }
+        if encoding == .macOSRoman { return "Mac OS 罗马编码" }
         return "编码 \(encoding.rawValue)"
     }
 
@@ -235,7 +235,7 @@ final class FileService {
         FileEncodingChoice(name: "简体中文（GB 18030）", encoding: gb18030Encoding),
         FileEncodingChoice(name: "西欧（ISO Latin 1）", encoding: .isoLatin1),
         FileEncodingChoice(name: "西欧（Windows Latin 1）", encoding: .windowsCP1252),
-        FileEncodingChoice(name: "Mac OS Roman", encoding: .macOSRoman)
+        FileEncodingChoice(name: "Mac OS 罗马编码", encoding: .macOSRoman)
     ]
 
     nonisolated private static func countLines(in text: String) -> Int {

@@ -58,12 +58,18 @@ final class TabDragHandleView: NSView, NSDraggingSource {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
         setAccessibilityElement(false)
         registerForDraggedTypes([WindowManager.tabPasteboardType])
     }
 
     required init?(coder: NSCoder) {
         nil
+    }
+
+    override var isOpaque: Bool {
+        false
     }
 
     override func resetCursorRects() {

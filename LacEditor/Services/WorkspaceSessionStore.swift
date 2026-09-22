@@ -285,7 +285,9 @@ final class WorkspaceSessionStore: @unchecked Sendable {
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first ?? FileManager.default.temporaryDirectory
-        return base.appendingPathComponent("LacEditor", isDirectory: true)
+        let directory = Bundle.main.bundleIdentifier == "com.laceditor.acceptance"
+            ? "LacEditor-Acceptance" : "LacEditor"
+        return base.appendingPathComponent(directory, isDirectory: true)
             .appendingPathComponent("Workspace", isDirectory: true)
     }
 }

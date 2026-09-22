@@ -1,0 +1,10 @@
+/* LacEditor 的系统菜单标题。SwiftUI 的标准 CommandGroup 会读取这些
+   本地化键，确保 File/Edit/View 等 AppKit 顶层菜单也使用中文。 */
+"File" = "文件";
+"Edit" = "编辑";
+"View" = "显示";
+"Window" = "窗口";
+"Help" = "帮助";
+"Sidebar" = "侧边栏";
+"Hide Sidebar" = "隐藏侧边栏";
+"Show Sidebar" = "显示侧边栏";
