@@ -271,6 +271,55 @@ final class NativeTabsTests: XCTestCase {
         XCTAssertFalse(document.isDirty)
     }
 
+    func testNewNativeTabPreservesSidebarVisibility() async throws {
+        _ = NSApplication.shared
+        let defaults = UserDefaults.standard
+        let savedVisibility = defaults.object(forKey: "isSidebarVisible")
+        defer { defaults.set(savedVisibility, forKey: "isSidebarVisible") }
+
+        let manager = WindowManager()
+        let source = manager.openNewWindow()
+        let window = try XCTUnwrap(source.hostWindow)
+        defer {
+            for member in window.tabGroup?.windows ?? [window] {
+                member.delegate = nil
+                member.close()
+            }
+        }
+        func sidebarItem(in view: NSView) -> NSSplitViewItem? {
+            if let split = view as? NSSplitView,
+               let controller = split.delegate as? NSSplitViewController,
+               let item = controller.splitViewItems.first, item.behavior == .sidebar {
+                return item
+            }
+            return view.subviews.lazy.compactMap { sidebarItem(in: $0) }.first
+        }
+
+        try await Task.sleep(for: .milliseconds(300))
+        var previous = source
+        for (isVisible, defaultVisibility) in [(false, false), (false, true), (true, false)] {
+            previous.isSidebarVisible = isVisible
+            try await Task.sleep(for: .milliseconds(200))
+            let previousWindow = try XCTUnwrap(previous.hostWindow)
+            let previousItem = try XCTUnwrap(sidebarItem(in: XCTUnwrap(previousWindow.contentView)))
+            XCTAssertEqual(previousItem.isCollapsed, !isVisible)
+
+            // A different window may have last written the global preference.
+            defaults.set(defaultVisibility, forKey: "isSidebarVisible")
+            let tab = manager.openNativeTab(from: previous)
+            XCTAssertEqual(tab.isSidebarVisible, isVisible)
+            let tabWindow = try XCTUnwrap(tab.hostWindow)
+            try await Task.sleep(for: .milliseconds(300))
+
+            XCTAssertTrue(window.tabGroup?.windows.contains(tabWindow) == true)
+            XCTAssertEqual(tab.isSidebarVisible, isVisible)
+            XCTAssertEqual(previous.isSidebarVisible, isVisible)
+            let item = try XCTUnwrap(sidebarItem(in: XCTUnwrap(tabWindow.contentView)))
+            XCTAssertEqual(item.isCollapsed, !isVisible)
+            previous = tab
+        }
+    }
+
     func testRealWindowCloseReopenAndCreateTab() async throws {
         _ = NSApplication.shared
         let manager = WindowManager()

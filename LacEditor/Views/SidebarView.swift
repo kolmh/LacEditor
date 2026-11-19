@@ -44,6 +44,7 @@ struct SidebarView: View {
                 ExperimentSampleControls(samples: samples)
             }
 
+            SidebarPersistenceFeedback(library: windowManager.sidebarLibrary)
             SidebarOperationFeedback(state: appState.sidebarFeedback)
 
             Button {
@@ -77,6 +78,28 @@ struct SidebarView: View {
             .onHover { isSettingsHovering = $0 }
         }
         .background(SidebarMaterialBackground())
+    }
+}
+
+private struct SidebarPersistenceFeedback: View {
+    @ObservedObject var library: SidebarLibraryStore
+
+    var body: some View {
+        if let error = library.persistenceError {
+            VStack(alignment: .leading, spacing: 6) {
+                Label("收藏与分组尚未保存", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                Text("请在退出前重试保存。")
+                    .foregroundStyle(.secondary)
+                Button("重试保存") { library.retrySaving() }
+            }
+            .font(.system(size: 11))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(10)
+            .help(error)
+            .accessibilityElement(children: .contain)
+            .padding(.horizontal, 10)
+        }
     }
 }
 

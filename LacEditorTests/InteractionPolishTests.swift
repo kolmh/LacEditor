@@ -5,6 +5,191 @@ import XCTest
 
 @MainActor
 final class InteractionPolishTests: XCTestCase {
+    func testUnsavedSidebarChangesRequireExplicitExitDecision() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LacEditorSidebarExit-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let blocker = root.appendingPathComponent("blocked")
+        try Data("blocked".utf8).write(to: blocker)
+        let library = SidebarLibraryStore(storageURL: blocker.appendingPathComponent("Sidebar.json"))
+        library.toggleFavorite(root.appendingPathComponent("draft.txt"))
+        let suite = "LacEditorTests.sidebar.exit.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = AppPreferences(defaults: defaults)
+        preferences.workspaceExitBehavior = .askToSave
+        let manager = WindowManager(preferences: preferences, recentFiles: RecentFilesStore(defaults: defaults),
+                                    sidebarLibrary: library)
+        let state = manager.openNewWindow()
+        let window = try XCTUnwrap(state.hostWindow)
+        defer { state.closeAuxiliaryWindows(); window.delegate = nil; window.close() }
+        for choice in ["取消退出", "仍然退出"] {
+            var approved: Bool?
+            manager.requestApplicationTermination { approved = $0 }
+            try await Task.sleep(for: .milliseconds(80))
+            let sheet = try XCTUnwrap(window.attachedSheet)
+            func button(in view: NSView) -> NSButton? {
+                if let button = view as? NSButton, button.title == choice { return button }
+                return view.subviews.lazy.compactMap { button(in: $0) }.first
+            }
+            try XCTUnwrap(button(in: try XCTUnwrap(sheet.contentView))).performClick(nil)
+            try await Task.sleep(for: .milliseconds(100))
+            XCTAssertEqual(approved, choice == "仍然退出")
+            XCTAssertNotNil(library.persistenceError)
+        }
+    }
+
+    func testSidebarSaveFailureHasNoSuccessFeedbackAndCanRetryWithoutLosingChanges() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("LacEditorSidebarFailure-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Store")
+        let storage = folder.appendingPathComponent("Sidebar.json")
+        let library = SidebarLibraryStore(storageURL: storage)
+        let first = root.appendingPathComponent("first.txt")
+        let second = root.appendingPathComponent("second.txt")
+        library.toggleFavorite(first)
+        let saved = try Data(contentsOf: storage)
+        let backup = root.appendingPathComponent("ExistingStore")
+        try FileManager.default.moveItem(at: folder, to: backup)
+        try Data("blocked parent".utf8).write(to: folder)
+
+        let suite = "LacEditorTests.sidebar.failure.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let manager = WindowManager(
+            preferences: AppPreferences(defaults: defaults), recentFiles: RecentFilesStore(defaults: defaults),
+            sidebarLibrary: library
+        )
+        let state = AppState(recentFiles: manager.recentFiles, preferences: manager.preferences)
+        state.windowManager = manager
+        defer { state.closeAuxiliaryWindows() }
+        state.toggleSidebarFavorite(second)
+        XCTAssertNotNil(library.persistenceError)
+        XCTAssertNil(state.sidebarFeedback.item)
+        XCTAssertTrue(library.isFavorite(first))
+        XCTAssertTrue(library.isFavorite(second))
+        XCTAssertEqual(try Data(contentsOf: backup.appendingPathComponent("Sidebar.json")), saved)
+        XCTAssertFalse(library.retrySaving())
+
+        try FileManager.default.removeItem(at: folder)
+        try FileManager.default.moveItem(at: backup, to: folder)
+        XCTAssertTrue(library.retrySaving())
+        XCTAssertNil(library.persistenceError)
+        let reloaded = SidebarLibraryStore(storageURL: storage)
+        XCTAssertTrue(reloaded.isFavorite(first))
+        XCTAssertTrue(reloaded.isFavorite(second))
+    }
+
+    func testTextConversionRejectsModelAndPendingLiveChangesBeforeCompletion() async throws {
+        for liveChange in [false, true] {
+            let suite = "LacEditorTests.conversion.stale.\(UUID())"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let document = EditorDocument(text: "before")
+            let state = AppState(initialDocument: document, recentFiles: RecentFilesStore(defaults: defaults),
+                                 preferences: AppPreferences(defaults: defaults))
+            defer { state.closeAuxiliaryWindows() }
+            let selection = EditorTextSelectionSnapshot(
+                documentID: document.id, range: NSRange(location: 0, length: 6), text: "before",
+                editorRevision: 400, wasExplicitSelection: true
+            )
+            let observer = NotificationCenter.default.addObserver(
+                forName: EditorCommandNotification.extractTextSelection, object: nil, queue: .main
+            ) { notification in
+                (notification.object as? EditorTextExtractionRequest)?.result = selection
+            }
+            defer { NotificationCenter.default.removeObserver(observer) }
+            state.presentTextTransformation(.base64Encode)
+            if liveChange { document.noteLiveEdit(isEmpty: false) }
+            else { document.text = "after" }
+            for _ in 0..<100 {
+                if document.statusMessage != "正在转换文本…" { break }
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            XCTAssertNil(state.textTransformation.preview)
+            XCTAssertEqual(document.statusMessage, "内容已变化，转换已取消")
+        }
+    }
+
+    func testTextConversionAcceptsPendingLiveSelectionWithDifferentEditorRevision() async throws {
+        let suite = "LacEditorTests.conversion.live.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let document = EditorDocument(text: "old")
+        let providerID = UUID()
+        document.attachLiveTextProvider(id: providerID, provider: { "new" }, acknowledgement: { _ in })
+        document.noteLiveEdit(isEmpty: false)
+        let state = AppState(initialDocument: document, recentFiles: RecentFilesStore(defaults: defaults),
+                             preferences: AppPreferences(defaults: defaults))
+        defer { state.closeAuxiliaryWindows(); document.detachLiveTextProvider(id: providerID) }
+        let selection = EditorTextSelectionSnapshot(
+            documentID: document.id, range: NSRange(location: 0, length: 3), text: "new",
+            editorRevision: 400, wasExplicitSelection: true
+        )
+        let observer = NotificationCenter.default.addObserver(
+            forName: EditorCommandNotification.extractTextSelection, object: nil, queue: .main
+        ) { notification in
+            (notification.object as? EditorTextExtractionRequest)?.result = selection
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+        state.presentTextTransformation(.base64Encode)
+        for _ in 0..<100 {
+            if state.textTransformation.preview != nil { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(document.text, "new")
+        XCTAssertEqual(state.textTransformation.preview?.output, "bmV3")
+        XCTAssertEqual(state.textTransformation.preview?.editorRevision, 400)
+    }
+
+    func testClosingWaitCanBeCancelledAndDoesNotBlockOtherDocuments() async throws {
+        let suite = "LacEditorTests.close.wait.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let saving = EditorDocument(text: "saving")
+        let other = EditorDocument(text: "other")
+        saving.markSaved()
+        other.markSaved()
+        let state = AppState(initialDocuments: [saving, other], recentFiles: RecentFilesStore(defaults: defaults),
+                             preferences: AppPreferences(defaults: defaults))
+        defer { state.closeAuxiliaryWindows() }
+        saving.ioState = .saving
+        state.close(saving)
+        state.close(other)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertEqual(state.documents.map(\.id), [saving.id])
+        state.close(saving) // Cancel the pending close without cancelling its save.
+        saving.ioState = .idle
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(state.selectedDocument === saving)
+        state.close(saving)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertFalse(state.documents.contains { $0 === saving })
+    }
+
+    func testTransferringDocumentInvalidatesItsPendingCloseRequest() async throws {
+        let suite = "LacEditorTests.close.transfer.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let document = EditorDocument(text: "saved")
+        document.markSaved()
+        let state = AppState(initialDocument: document, recentFiles: RecentFilesStore(defaults: defaults),
+                             preferences: AppPreferences(defaults: defaults))
+        defer { state.closeAuxiliaryWindows() }
+        document.ioState = .saving
+        state.close(document)
+        let transferred = try XCTUnwrap(state.takeDocumentForTransfer(document))
+        state.receiveTransferredDocument(transferred, before: nil)
+        document.ioState = .idle
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(state.documents.contains { $0 === document })
+        state.close(document)
+        try await Task.sleep(for: .milliseconds(40))
+        XCTAssertFalse(state.documents.contains { $0 === document })
+    }
+
     func testPreviewToolbarItemFollowsLanguageAndKeepsOtherControls() async throws {
         _ = NSApplication.shared
         let suite = "LacEditorTests.ui9.toolbar.\(UUID())"

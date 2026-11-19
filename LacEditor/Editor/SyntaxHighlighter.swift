@@ -276,6 +276,7 @@ enum SyntaxHighlighter {
         in string: NSString,
         range: NSRange
     ) -> [Token] {
+        let source = string as String
         let scanRange = contextualRange(in: string, around: range)
         let end = NSMaxRange(scanRange)
         var location = scanRange.location
@@ -341,7 +342,7 @@ enum SyntaxHighlighter {
             }
 
             result.append(contentsOf: CodeLexicalScanner.tokens(
-                in: string as String,
+                in: source,
                 language: .html,
                 range: tagRange
             ).map(syntaxToken))

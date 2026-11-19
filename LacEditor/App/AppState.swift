@@ -249,14 +249,15 @@ final class AppState: ObservableObject {
         initialDocuments: [EditorDocument] = [],
         recentFiles: RecentFilesStore,
         preferences: AppPreferences,
-        recoveryStore: DocumentRecoveryStore? = nil
+        recoveryStore: DocumentRecoveryStore? = nil,
+        initialSidebarVisibility: Bool? = nil
     ) {
         self.recentFiles = recentFiles
         self.preferences = preferences
         self.recoveryStore = recoveryStore
-        isSidebarVisible = UserDefaults.standard.object(
-            forKey: "isSidebarVisible"
-        ) as? Bool ?? true
+        isSidebarVisible = initialSidebarVisibility
+            ?? (UserDefaults.standard.object(forKey: "isSidebarVisible") as? Bool)
+            ?? true
         preferencesCancellable = preferences.objectWillChange.sink { [weak self] in
             self?.objectWillChange.send()
         }
@@ -305,6 +306,7 @@ final class AppState: ObservableObject {
         }
         documentTaskQueue.cancelAllOperations()
         recoveryWorkItems.values.forEach { $0.cancel() }
+        closeSaveWaitItems.values.forEach { $0.cancel() }
     }
 
     var selectedDocument: EditorDocument? {
@@ -643,10 +645,18 @@ final class AppState: ObservableObject {
         if let document = selectedDocument { close(document) }
     }
 
-    private var isClosingDocument = false
+    private var closingDocumentRequests: [UUID: UUID] = [:]
+    private var closeSaveWaitItems: [UUID: DispatchWorkItem] = [:]
 
     func close(_ document: EditorDocument) {
-        guard !isClosingDocument else { return }
+        guard documents.contains(where: { $0 === document }) else { return }
+        if closingDocumentRequests[document.id] != nil {
+            if closeSaveWaitItems[document.id] != nil {
+                cancelDocumentClose(document.id)
+                document.statusMessage = "已取消关闭，保存仍在继续"
+            }
+            return
+        }
         // A native tab is an NSWindow. Keep the last populated tab's window
         // alive and replace its document; only a disposable blank closes it.
         if documents.count == 1, let hostWindow,
@@ -654,20 +664,41 @@ final class AppState: ObservableObject {
             hostWindow.performClose(nil)
             return
         }
-        isClosingDocument = true
-        let confirm = { [weak self, weak document] in
-            guard let self, let document else { return }
-            self.confirmClosing(document) { [weak self, weak document] shouldClose in
-                DispatchQueue.main.async {
-                    guard let self else { return }
-                    self.isClosingDocument = false
-                    guard shouldClose, let document else { return }
-                    self.removeDocument(document)
-                }
+        let requestID = UUID()
+        closingDocumentRequests[document.id] = requestID
+        continueDocumentClose(document.id, requestID: requestID)
+    }
+
+    private func cancelDocumentClose(_ documentID: UUID) {
+        closingDocumentRequests.removeValue(forKey: documentID)
+        closeSaveWaitItems.removeValue(forKey: documentID)?.cancel()
+    }
+
+    private func continueDocumentClose(_ documentID: UUID, requestID: UUID) {
+        guard closingDocumentRequests[documentID] == requestID else { return }
+        guard let document = documents.first(where: { $0.id == documentID }) else {
+            cancelDocumentClose(documentID)
+            return
+        }
+        if document.ioState == .saving {
+            document.statusMessage = "正在保存，完成后关闭；再次关闭可取消等待"
+            let work = DispatchWorkItem { [weak self] in
+                self?.continueDocumentClose(documentID, requestID: requestID)
+            }
+            closeSaveWaitItems[documentID] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
+            return
+        }
+        closeSaveWaitItems.removeValue(forKey: documentID)?.cancel()
+        confirmClosing(document) { [weak self, weak document] shouldClose in
+            DispatchQueue.main.async {
+                guard let self, self.closingDocumentRequests[documentID] == requestID else { return }
+                self.cancelDocumentClose(documentID)
+                guard shouldClose, let document,
+                      self.documents.contains(where: { $0 === document }) else { return }
+                self.removeDocument(document)
             }
         }
-        if hasPendingSave { waitForPendingSaves(completion: confirm) }
-        else { confirm() }
     }
 
     func closeOtherDocuments(keeping document: EditorDocument) {
@@ -860,6 +891,10 @@ final class AppState: ObservableObject {
                 : "请先选择需要转换的文本"
             return
         }
+        // The selection carries the editor's revision. Flush pending live edits
+        // separately and retain the model revision for the completion guard.
+        document.synchronizeLiveText()
+        let revision = document.textRevision
 
         let inputByteCount = snapshot.text.utf8.count
         guard inputByteCount <= TextCodecService.maximumInputByteLimit else {
@@ -899,7 +934,7 @@ final class AppState: ObservableObject {
                     )
                 }
                 return TextTransformationPreview(
-                    documentID: document.id,
+                    documentID: snapshot.documentID,
                     range: snapshot.range,
                     input: snapshot.text,
                     output: output,
@@ -911,6 +946,12 @@ final class AppState: ObservableObject {
         } completion: { [weak self, weak document] result in
             guard let self, let document,
                   self.documents.contains(where: { $0.id == document.id }) else { return }
+            guard self.isTaskResultCurrent(document, revision: revision) else {
+                if document.statusMessage == "正在转换文本…" {
+                    document.statusMessage = "内容已变化，转换已取消"
+                }
+                return
+            }
             switch result {
             case let .success(preview):
                 document.statusMessage = nil
@@ -973,6 +1014,7 @@ final class AppState: ObservableObject {
     }
 
     func closeAuxiliaryWindows() {
+        for id in Array(closingDocumentRequests.keys) { cancelDocumentClose(id) }
         sidebarFeedback.clear()
         dismissFindReplace()
         openingOperations.values.forEach { $0.cancel() }
@@ -1199,6 +1241,7 @@ final class AppState: ObservableObject {
         let previous = library.favoritePaths
         let wasFavorite = library.isFavorite(url)
         library.toggleFavorite(url)
+        guard library.persistenceError == nil else { sidebarFeedback.clear(); return }
         let expected = library.favoritePaths
         sidebarFeedback.show(wasFavorite ? "已从收藏夹移除" : "已添加到收藏夹") { [weak library] in
             library?.restoreFavorites(previous, ifUnchanged: expected) ?? false
@@ -1213,6 +1256,7 @@ final class AppState: ObservableObject {
             return
         }
         library.add(url, toGroup: id)
+        guard library.persistenceError == nil else { sidebarFeedback.clear(); return }
         let expected = library.groups.first(where: { $0.id == id })?.paths ?? []
         sidebarFeedback.show("已添加到“\(group.name)”") { [weak library] in
             library?.restoreGroupFiles(group.paths, in: id, ifUnchanged: expected) ?? false
@@ -1223,6 +1267,7 @@ final class AppState: ObservableObject {
         guard let library = windowManager?.sidebarLibrary,
               let group = library.groups.first(where: { $0.id == id }) else { return }
         library.remove(url, fromGroup: id)
+        guard library.persistenceError == nil else { sidebarFeedback.clear(); return }
         let expected = library.groups.first(where: { $0.id == id })?.paths ?? []
         guard group.paths != expected else { return }
         sidebarFeedback.show("已从“\(group.name)”移除") { [weak library] in
@@ -1271,6 +1316,7 @@ final class AppState: ObservableObject {
     }
 
     private func stopObserving(_ document: EditorDocument) {
+        cancelDocumentClose(document.id)
         document.taskCoordinator.cancel(.search)
         document.taskCoordinator.cancel(.replace)
         document.taskCoordinator.cancel(.json)

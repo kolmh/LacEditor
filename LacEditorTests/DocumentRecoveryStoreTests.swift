@@ -68,8 +68,181 @@ final class DocumentRecoveryStoreTests: XCTestCase {
         ])
 
         try store.saveForTesting(snapshot)
-        XCTAssertEqual(try store.loadAndConsume(), snapshot)
+        XCTAssertEqual(try store.loadAndConsume()?.snapshot, snapshot)
         XCTAssertNil(try store.loadAndConsume())
+    }
+
+    func testDamagedUTF8PreservesOriginalBytesAndRestoresHealthyTabs() throws {
+        let root = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceSessionStore(rootURL: root)
+        let damagedID = UUID()
+        let healthyID = UUID()
+        try store.saveForTesting(workspaceSnapshot(ids: [damagedID, healthyID]))
+        let damagedURL = try workspaceContentURL(root: root, id: damagedID)
+        let original = Data([0x41, 0xff, 0x42])
+        try original.write(to: damagedURL)
+
+        let result = try XCTUnwrap(store.loadAndConsume())
+        XCTAssertEqual(result.skippedDocumentCount, 1)
+        XCTAssertEqual(result.snapshot.windows.first?.documents.map(\.documentID), [healthyID])
+        XCTAssertEqual(result.snapshot.windows.first?.selectedDocumentID, healthyID)
+        let preserved = try preservedContentURL(root: root, id: damagedID)
+        XCTAssertEqual(try Data(contentsOf: preserved), original)
+        XCTAssertNil(try store.loadAndConsume())
+
+        // A later successful save/consume must not clean up the damaged backup.
+        try store.saveForTesting(workspaceSnapshot(ids: [healthyID]))
+        _ = try store.loadAndConsume()
+        XCTAssertEqual(try Data(contentsOf: preserved), original)
+    }
+
+    func testCorruptManifestAndMarkerArePreservedBeforeFutureSaves() throws {
+        for corruptMarker in [false, true] {
+            let root = makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = WorkspaceSessionStore(rootURL: root)
+            let id = UUID()
+            try store.saveForTesting(workspaceSnapshot(ids: [id]))
+            let original = try Data(contentsOf: workspaceContentURL(root: root, id: id))
+            let corruptURL = corruptMarker
+                ? root.appendingPathComponent("CurrentWorkspace.json")
+                : try workspaceContentURL(root: root, id: id).deletingLastPathComponent().appendingPathComponent("Manifest.json")
+            try Data("invalid json".utf8).write(to: corruptURL)
+            XCTAssertThrowsError(try store.loadAndConsume())
+            let preserved = try preservedContentURL(root: root, id: id)
+            XCTAssertEqual(try Data(contentsOf: preserved), original)
+            try store.saveForTesting(workspaceSnapshot(ids: [UUID()]))
+            _ = try store.loadAndConsume()
+            XCTAssertEqual(try Data(contentsOf: preserved), original)
+        }
+    }
+
+    @MainActor
+    func testFailedPreservationBlocksSaveAndClearUntilRetrySucceeds() async throws {
+        let root = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceSessionStore(rootURL: root)
+        let id = UUID()
+        try store.saveForTesting(workspaceSnapshot(ids: [id]))
+        let contentURL = try workspaceContentURL(root: root, id: id)
+        let raw = Data([0xff, 0xfe])
+        try raw.write(to: contentURL)
+        let blocker = root.appendingPathComponent("Preserved")
+        try Data("not a directory".utf8).write(to: blocker)
+        let markerURL = root.appendingPathComponent("CurrentWorkspace.json")
+        let originalMarker = try Data(contentsOf: markerURL)
+        XCTAssertThrowsError(try store.loadAndConsume())
+        XCTAssertThrowsError(try store.saveForTesting(workspaceSnapshot(ids: [UUID()])))
+        let clearResult: Result<Void, Error> = await withCheckedContinuation { continuation in
+            store.clear { continuation.resume(returning: $0) }
+        }
+        XCTAssertThrowsError(try clearResult.get())
+        XCTAssertEqual(try Data(contentsOf: markerURL), originalMarker)
+        XCTAssertEqual(try Data(contentsOf: contentURL), raw)
+
+        try FileManager.default.removeItem(at: blocker)
+        try store.saveForTesting(workspaceSnapshot(ids: [UUID()]))
+        let preserved = try preservedContentURL(root: root, id: id)
+        XCTAssertEqual(try Data(contentsOf: preserved), raw)
+        let successfulClear: Result<Void, Error> = await withCheckedContinuation { continuation in
+            store.clear { continuation.resume(returning: $0) }
+        }
+        XCTAssertNoThrow(try successfulClear.get())
+        XCTAssertEqual(try Data(contentsOf: preserved), raw)
+    }
+
+    @MainActor
+    func testWindowManagerReportsPartialAndFailedRestoration() throws {
+        for corruptManifest in [false, true] {
+            let root = makeTemporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let store = WorkspaceSessionStore(rootURL: root)
+            let id = UUID()
+            try store.saveForTesting(workspaceSnapshot(ids: [id]))
+            let content = try workspaceContentURL(root: root, id: id)
+            let target = corruptManifest ? content.deletingLastPathComponent().appendingPathComponent("Manifest.json") : content
+            try Data([0xff]).write(to: target)
+            let suite = "LacEditorRecoveryTests.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            let manager = WindowManager(
+                workspaceStore: store, preferences: AppPreferences(defaults: defaults),
+                recentFiles: RecentFilesStore(defaults: defaults),
+                sidebarLibrary: SidebarLibraryStore(storageURL: root.appendingPathComponent("Sidebar.json"))
+            )
+            XCTAssertNotNil(manager.restorationMessage)
+            XCTAssertEqual(manager.restorationFilesURL, root)
+            XCTAssertTrue(manager.takeRecoveredDocuments().isEmpty)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("Preserved").path))
+        }
+    }
+
+    func testDuplicateRecoveryMetadataChoosesNewestTimestampThenRevision() throws {
+        let root = makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let id = UUID()
+        let store = DocumentRecoveryStore(rootURL: root)
+        _ = try store.startSession()
+        store.persist(makeSnapshot(documentID: id, text: "original", revision: 1))
+        store.flushForTesting()
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        let metadataURL = try XCTUnwrap(enumerator.allObjects.compactMap { $0 as? URL }.first {
+            $0.lastPathComponent == "\(id.uuidString.lowercased()).json"
+        })
+        let directory = metadataURL.deletingLastPathComponent()
+        var metadata = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: metadataURL)) as? [String: Any])
+        metadata["revision"] = 2
+        metadata["contentFileName"] = "newer.utf8"
+        try Data("newer revision".utf8).write(to: directory.appendingPathComponent("newer.utf8"))
+        try JSONSerialization.data(withJSONObject: metadata).write(to: directory.appendingPathComponent("a-duplicate.json"))
+        let recovered = try DocumentRecoveryStore(rootURL: root).startSession()
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recovered.first?.text, "newer revision")
+
+        let nextEnumerator = try XCTUnwrap(FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil))
+        let activeMetadata = try XCTUnwrap(nextEnumerator.allObjects.compactMap { $0 as? URL }.first {
+            $0.lastPathComponent == "\(id.uuidString.lowercased()).json"
+        })
+        var newest = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: activeMetadata)) as? [String: Any])
+        newest["capturedAt"] = try XCTUnwrap(newest["capturedAt"] as? Double) + 60
+        newest["revision"] = 0
+        newest["contentFileName"] = "latest.utf8"
+        let activeDirectory = activeMetadata.deletingLastPathComponent()
+        try Data("newest timestamp".utf8).write(to: activeDirectory.appendingPathComponent("latest.utf8"))
+        try JSONSerialization.data(withJSONObject: newest).write(to: activeDirectory.appendingPathComponent("z-duplicate.json"))
+        let newestRecovery = try DocumentRecoveryStore(rootURL: root).startSession()
+        XCTAssertEqual(newestRecovery.count, 1)
+        XCTAssertEqual(newestRecovery.first?.text, "newest timestamp")
+        XCTAssertEqual(newestRecovery.first?.revision, 0)
+    }
+
+    private func workspaceSnapshot(ids: [UUID]) -> WorkspaceSessionSnapshot {
+        WorkspaceSessionSnapshot(windows: [WorkspaceWindowSnapshot(
+            documents: ids.map { id in
+                WorkspaceDocumentSnapshot(
+                    documentID: id, text: "draft \(id)", sourceURL: nil,
+                    language: .plainText, encoding: .utf8, isDirty: true,
+                    selectionRange: NSRange(location: 0, length: 0),
+                    scrollPositionRatio: 0, isPreviewVisible: false, fileRevisionSnapshot: nil
+                )
+            }, selectedDocumentID: ids.first, isSidebarVisible: true, frame: nil
+        )])
+    }
+
+    private func workspaceContentURL(root: URL, id: UUID) throws -> URL {
+        let directory = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix("Workspace-") })
+        return directory.appendingPathComponent("\(id.uuidString.lowercased()).utf8")
+    }
+
+    private func preservedContentURL(root: URL, id: UUID) throws -> URL {
+        let enumerator = try XCTUnwrap(FileManager.default.enumerator(
+            at: root.appendingPathComponent("Preserved"), includingPropertiesForKeys: nil
+        ))
+        return try XCTUnwrap(enumerator.allObjects.compactMap { $0 as? URL }.first {
+            $0.lastPathComponent == "\(id.uuidString.lowercased()).utf8"
+        })
     }
 
     func testAbnormalSessionRestoresLatestAtomicSnapshot() throws {

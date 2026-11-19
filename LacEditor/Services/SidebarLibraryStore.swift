@@ -51,6 +51,7 @@ final class SidebarLibraryStore: ObservableObject {
     @Published private(set) var favoriteSectionExpanded = true
     @Published private(set) var groupsSectionExpanded = true
     @Published private(set) var recentSectionExpanded = true
+    @Published private(set) var persistenceError: String?
 
     private struct Snapshot: Codable {
         var favoritePaths: [String]
@@ -103,16 +104,14 @@ final class SidebarLibraryStore: ObservableObject {
     func restoreFavorites(_ paths: [String], ifUnchanged expected: [String]) -> Bool {
         guard favoritePaths == expected else { return false }
         favoritePaths = paths
-        persist()
-        return true
+        return persist()
     }
 
     func restoreGroupFiles(_ paths: [String], in id: UUID, ifUnchanged expected: [String]) -> Bool {
         guard let index = groups.firstIndex(where: { $0.id == id }),
               groups[index].paths == expected else { return false }
         groups[index].paths = paths
-        persist()
-        return true
+        return persist()
     }
 
     @discardableResult
@@ -222,7 +221,13 @@ final class SidebarLibraryStore: ObservableObject {
         }
     }
 
-    private func persist() {
+    @discardableResult
+    func retrySaving() -> Bool {
+        persist()
+    }
+
+    @discardableResult
+    private func persist() -> Bool {
         do {
             try FileManager.default.createDirectory(
                 at: storageURL.deletingLastPathComponent(),
@@ -236,8 +241,11 @@ final class SidebarLibraryStore: ObservableObject {
                 recentSectionExpanded: recentSectionExpanded
             ))
             try data.write(to: storageURL, options: .atomic)
+            persistenceError = nil
+            return true
         } catch {
-            assertionFailure("Unable to persist sidebar library: \(error)")
+            persistenceError = error.localizedDescription
+            return false
         }
     }
 

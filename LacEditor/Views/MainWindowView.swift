@@ -33,16 +33,6 @@ struct MainWindowView: View {
     @ViewBuilder
     private var editorWorkspace: some View {
         VStack(spacing: 0) {
-            // Keep tabs in the content hierarchy so the editor split reserves
-            // their height instead of drawing its divider behind an accessory.
-            if showsTabBar {
-                TabBarView()
-                    .environmentObject(appState)
-                    .environmentObject(windowManager)
-                    .frame(height: LacEditorDesign.tabBarHeight)
-                Divider()
-            }
-
             if let selectedDocument = appState.selectedDocument {
                 DocumentEditorPane(
                     document: selectedDocument,
@@ -55,7 +45,7 @@ struct MainWindowView: View {
                         globalDefault: appState.isWordWrapEnabled
                     ),
                     showsLineNumbers: appState.isLineNumbersVisible,
-                    editorTopInset: showsTabBar ? 4 : 0,
+                    editorTopInset: 0,
                     darkMode: colorScheme == .dark
                 )
                 .id(selectedDocument.id)
@@ -70,6 +60,22 @@ struct MainWindowView: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
+            if let message = windowManager.restorationMessage {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    Text(message).font(.system(size: 12)).textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    if let url = windowManager.restorationFilesURL {
+                        Button("查看恢复文件") { NSWorkspace.shared.open(url) }
+                    }
+                    Button { windowManager.dismissRestorationMessage() } label: {
+                        Image(systemName: "xmark")
+                    }.accessibilityLabel("关闭恢复提示")
+                }
+                .padding(10)
+                Divider()
+            }
+
         }
         .animation(
             reduceMotion ? nil : LacEditorDesign.structuralAnimation,
@@ -93,10 +99,6 @@ struct MainWindowView: View {
             }
         }
         return !providers.isEmpty
-    }
-
-    private var showsTabBar: Bool {
-        false // Native NSWindow tabs reserve their own titlebar space.
     }
 
 }
@@ -214,8 +216,10 @@ private struct NativeSidebarSplitView: NSViewControllerRepresentable {
         controller.splitView.dividerStyle = .thin
         controller.splitView.isVertical = true
         controller.view.wantsLayer = true
-        DispatchQueue.main.async { [weak controller] in
-            guard let controller else { return }
+        DispatchQueue.main.async { [weak controller, weak sidebarItem, weak appState] in
+            // Positioning a collapsed divider can expand the sidebar in AppKit.
+            guard let controller, sidebarItem?.isCollapsed == false,
+                  appState?.isSidebarVisible == true else { return }
             controller.splitView.setPosition(
                 LacEditorDesign.sidebarWidth,
                 ofDividerAt: 0

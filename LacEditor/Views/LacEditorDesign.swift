@@ -87,7 +87,6 @@ extension View {
 enum LacEditorDesign {
     static let sidebarWidth: CGFloat = 250
     static let sidebarRowHeight: CGFloat = 34
-    static let tabBarHeight: CGFloat = 34
     static let tabHeight: CGFloat = 28
     static let statusBarHeight: CGFloat = 24
     static let compactCornerRadius: CGFloat = 6

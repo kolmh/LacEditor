@@ -12,6 +12,13 @@ struct DocumentRecoverySnapshot: Equatable, Sendable {
     let isPreviewVisible: Bool
     let fileRevisionSnapshot: FileRevisionSnapshot?
     let capturedAt: Date
+
+    static func newest(_ first: Self, _ second: Self) -> Self {
+        if first.capturedAt != second.capturedAt {
+            return first.capturedAt > second.capturedAt ? first : second
+        }
+        return first.revision >= second.revision ? first : second
+    }
 }
 
 final class DocumentRecoveryStore: @unchecked Sendable {
@@ -183,7 +190,7 @@ final class DocumentRecoveryStore: @unchecked Sendable {
         .filter { $0.pathExtension == "json" }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
 
-        return metadataURLs.compactMap { metadataURL in
+        let snapshots = metadataURLs.compactMap { metadataURL -> DocumentRecoverySnapshot? in
             guard let metadataData = try? Data(contentsOf: metadataURL),
                   let metadata = try? JSONDecoder().decode(
                     SnapshotMetadata.self,
@@ -232,7 +239,13 @@ final class DocumentRecoveryStore: @unchecked Sendable {
                 capturedAt: metadata.capturedAt
             )
         }
-        .sorted { $0.capturedAt < $1.capturedAt }
+        return Dictionary(
+            snapshots.map { ($0.documentID, $0) },
+            uniquingKeysWith: DocumentRecoverySnapshot.newest
+        ).values.sorted {
+            if $0.capturedAt != $1.capturedAt { return $0.capturedAt < $1.capturedAt }
+            return $0.documentID.uuidString < $1.documentID.uuidString
+        }
     }
 
     private func discardLocked(documentID: UUID) {

@@ -8,16 +8,16 @@ LacEditor 为日常文本、Markdown、JSON 和代码编辑而生：打开即写
 <p>
   <a href="https://github.com/kolmh/LacEditor/releases/latest">下载最新版</a>
   ·
-  <a href="https://github.com/kolmh/LacEditor/releases/tag/v0.15.0">查看更新日志</a>
+  <a href="https://github.com/kolmh/LacEditor/releases/tag/v0.15.1">查看更新日志</a>
   ·
   <a href="https://github.com/kolmh/LacEditor/issues">反馈问题</a>
 </p>
 
-> 最新正式发布：`0.15.0` · macOS 26+ · Apple Silicon
+> 最新正式发布：`0.15.1` · macOS 26+ · Apple Silicon
 
-当前版本：**0.15.0（构建 76）**。本版带来更紧凑的侧栏、可撤销的文件整理、更稳定的悬停反馈与「文件关联」设置，并修复双击关联文件冷启动时不显示窗口的问题。沿用原有设置和工作区，不包含体验文档入口或自动示例。
+当前正式版：**0.15.1（构建 78）**。新建标签不再自动展开已隐藏的侧边栏。本版还改进了工作区恢复、收藏保存失败提示与重试，以及关闭标签、文本转换和语法高亮的可靠性。沿用原有设置和工作区，不包含体验文档入口或自动示例。
 
-从 [GitHub Release](https://github.com/kolmh/LacEditor/releases/tag/v0.15.0) 下载 `LacEditor-0.15.0-arm64.zip`；退出旧版后解压，将 `LacEditor.app` 拖到「应用程序」替换。适用于 Apple Silicon、macOS 26 及以上。构建与验收见 [0.15.0 发布记录](AcceptanceReports/0.15.0-2026-10-21.md)。
+从 [GitHub Release](https://github.com/kolmh/LacEditor/releases/tag/v0.15.1) 下载 `LacEditor-0.15.1-arm64.zip`；退出旧版后解压，将 `LacEditor.app` 拖到「应用程序」替换。适用于 Apple Silicon、macOS 26 及以上。构建与验收见 [0.15.1 验收报告](AcceptanceReports/0.15.1-2026-11-19.md)。
 
 ## 为什么是 LacEditor？
 

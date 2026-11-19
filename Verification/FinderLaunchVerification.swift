@@ -35,11 +35,20 @@ struct FinderLaunchVerification {
               }) else { return nil }
         return attribute(area, kAXValueAttribute) as? String
     }
-    static func key(_ code: CGKeyCode, app: NSRunningApplication) {
+    static func key(_ code: CGKeyCode, app: NSRunningApplication, flags: CGEventFlags = .maskCommand) {
         for down in [true, false] {
             let event = CGEvent(keyboardEventSource: nil, virtualKey: code, keyDown: down)
-            event?.flags = .maskCommand
+            event?.flags = flags
             event?.postToPid(app.processIdentifier)
+        }
+    }
+    static func hasVisibleSidebar(_ app: NSRunningApplication) -> Bool {
+        let application = AXUIElementCreateApplication(app.processIdentifier)
+        guard let window = attribute(application, kAXFocusedWindowAttribute) else { return false }
+        return elements(window as! AXUIElement).contains {
+            let label = title($0) + (attribute($0, kAXDescriptionAttribute) as? String ?? "")
+                + (attribute($0, kAXValueAttribute) as? String ?? "")
+            return label.contains("最近文件")
         }
     }
     static func insert(_ value: String, app: NSRunningApplication) throws {
@@ -104,7 +113,25 @@ struct FinderLaunchVerification {
         }
     }
     @MainActor
-    static func verify(_ appURL: URL, multiple: Bool) async throws {
+    static func verifySidebar(_ appURL: URL, home: URL) async throws {
+        let app = try await launch(appURL, home: home, files: [])
+        defer { if !app.isTerminated { _ = app.forceTerminate() } }
+        try await wait("blank editor with sidebar") { text(app) == "" && hasVisibleSidebar(app) }
+        key(11, app: app, flags: [.maskCommand, .maskControl]) // Control+Command+B
+        try await wait("sidebar hidden in source tab") { text(app) == "" && !hasVisibleSidebar(app) }
+        try insert("source tab", app: app)
+        try await wait("source text visible") { text(app) == "source tab" }
+        key(17, app: app) // Command+T
+        try await wait("new blank tab") { text(app) == "" }
+        try await Task.sleep(for: .milliseconds(400))
+        try require(text(app) == "" && !hasVisibleSidebar(app), "Command+T reopened the hidden sidebar")
+        key(11, app: app, flags: [.maskCommand, .maskControl])
+        try await wait("sidebar responds to toggle in new tab") { hasVisibleSidebar(app) }
+        try await quit(app)
+        print("PASS Command+T preserves hidden sidebar; toggling it still works")
+    }
+    @MainActor
+    static func verify(_ appURL: URL, multiple: Bool, sidebarOnly: Bool = false) async throws {
         let fm = FileManager.default
         let home = fm.temporaryDirectory.appendingPathComponent("LacEditor-Finder-\(UUID())")
         try fm.createDirectory(at: home, withIntermediateDirectories: true)
@@ -115,6 +142,10 @@ struct FinderLaunchVerification {
             "hasConfirmedWorkspaceExitPrompt": true, "workspaceExitBehavior": "preserveWorkspace",
             "isSidebarVisible": true
         ], format: .xml, options: 0).write(to: prefs.appendingPathComponent(identifier + ".plist"))
+        if sidebarOnly {
+            try await verifySidebar(appURL, home: home)
+            return
+        }
         let first = home.appendingPathComponent("冷启动.txt")
         let second = home.appendingPathComponent("第二个.md")
         let third = home.appendingPathComponent("工作区恢复.json")
@@ -160,13 +191,7 @@ struct FinderLaunchVerification {
             let reopened = try await NSWorkspace.shared.openApplication(at: appURL, configuration: NSWorkspace.OpenConfiguration())
             try require(reopened.processIdentifier == app.processIdentifier, "Dock restarted App")
             try await wait("Dock reopens blank") { text(app) == "" }
-            try await wait("sidebar rebound") {
-                windows(app).flatMap { elements($0) }.contains {
-                    let label = title($0) + (attribute($0, kAXDescriptionAttribute) as? String ?? "")
-                        + (attribute($0, kAXValueAttribute) as? String ?? "")
-                    return label.contains("最近文件")
-                }
-            }
+            try await wait("sidebar rebound") { hasVisibleSidebar(app) }
             key(17, app: app)
             try await Task.sleep(for: .milliseconds(400))
             try await quit(app)
@@ -185,6 +210,7 @@ struct FinderLaunchVerification {
             defer { _ = previous?.activate(options: []) }
             try await verify(appURL, multiple: false)
             try await verify(appURL, multiple: true)
+            try await verify(appURL, multiple: false, sidebarOnly: true)
             print("Finder launch lifecycle passed.")
         } catch { fputs("Finder verification failed: \(error)\n", stderr); exit(1) }
     }

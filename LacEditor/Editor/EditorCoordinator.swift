@@ -1361,6 +1361,11 @@ extension EditorTextView {
             let snapshot = (synchronizedSnapshot as NSString).length == storage.length
                 ? synchronizedSnapshot
                 : storage.string
+            // Capture job inputs on the main thread so background tokenization
+            // never reads mutable coordinator state from a later edit.
+            let context = syntaxHighlightContext
+            let documentID = document.id
+            let edit = lastSyntaxEdit
             highlightOperation?.cancel()
             let operation = BlockOperation()
             operation.addExecutionBlock { [weak self, weak operation] in
@@ -1376,10 +1381,10 @@ extension EditorTextView {
                     in: snapshot,
                     language: language,
                     range: targetRange,
-                    context: self?.syntaxHighlightContext,
+                    context: context,
                     revision: revision,
-                    documentID: self?.document.id,
-                    edit: self?.lastSyntaxEdit,
+                    documentID: documentID,
+                    edit: edit,
                     isCancelled: { operation.isCancelled }
                 )
                 os_signpost(

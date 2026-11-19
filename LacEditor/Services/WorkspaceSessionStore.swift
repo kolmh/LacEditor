@@ -32,6 +32,11 @@ struct WorkspaceWindowFrame: Codable, Equatable, Sendable {
 }
 
 final class WorkspaceSessionStore: @unchecked Sendable {
+    struct LoadResult: Sendable {
+        let snapshot: WorkspaceSessionSnapshot
+        let skippedDocumentCount: Int
+    }
+
     private struct Marker: Codable {
         let workspaceID: UUID
     }
@@ -67,6 +72,10 @@ final class WorkspaceSessionStore: @unchecked Sendable {
 
     private let rootURL: URL
     private let fileManager: FileManager
+    // A failed archive must be retried before any save/clear can replace or
+    // remove the original data. Access is confined to queue.
+    private var pendingPreservationURLs: Set<URL> = []
+    var recoveryFilesURL: URL { rootURL }
     private let queue = DispatchQueue(
         label: "com.laceditor.workspace-session",
         qos: .utility
@@ -92,85 +101,127 @@ final class WorkspaceSessionStore: @unchecked Sendable {
         }
     }
 
-    func loadAndConsume() throws -> WorkspaceSessionSnapshot? {
+    func loadAndConsume() throws -> LoadResult? {
         try queue.sync {
-            guard let marker = try readMarker() else { return nil }
-            let directory = workspaceURL(for: marker.workspaceID)
-            let manifestURL = directory.appendingPathComponent("Manifest.json")
-            let manifest = try JSONDecoder().decode(
-                Manifest.self,
-                from: Data(contentsOf: manifestURL, options: .mappedIfSafe)
-            )
-            guard manifest.version == 1 else {
-                throw CocoaError(.fileReadCorruptFile)
-            }
-            let windows = try manifest.windows.map { window in
-                WorkspaceWindowSnapshot(
-                    documents: try window.documents.map { document in
-                        let contentURL = directory.appendingPathComponent(
-                            document.contentFileName
-                        )
-                        let data = try Data(
-                            contentsOf: contentURL,
-                            options: .mappedIfSafe
-                        )
-                        let baseline = document.canonicalPath.map {
-                            FileRevisionSnapshot(
-                                identity: DocumentFileIdentity(
-                                    canonicalPath: $0,
-                                    resourceIdentifier: document.resourceIdentifier
-                                ),
-                                modificationDate: document.modificationDate,
-                                fileSize: document.fileSize
-                            )
-                        }
-                        return WorkspaceDocumentSnapshot(
-                            documentID: document.documentID,
-                            text: String(decoding: data, as: UTF8.self),
-                            sourceURL: document.sourcePath.map {
-                                URL(fileURLWithPath: $0).standardizedFileURL
-                            },
-                            language: EditorLanguage(rawValue: document.language)
-                                ?? .plainText,
-                            encoding: String.Encoding(
-                                rawValue: document.encodingRawValue
-                            ),
-                            isDirty: document.isDirty,
-                            selectionRange: NSRange(
-                                location: document.selectionLocation,
-                                length: document.selectionLength
-                            ),
-                            scrollPositionRatio: CGFloat(
-                                document.scrollPositionRatio
-                            ),
-                            isPreviewVisible: document.isPreviewVisible,
-                            fileRevisionSnapshot: baseline
-                        )
-                    },
-                    selectedDocumentID: window.selectedDocumentID,
-                    isSidebarVisible: window.isSidebarVisible,
-                    frame: window.frame
+            let marker: Marker
+            do {
+                guard let value = try readMarker() else { return nil }
+                marker = value
+            } catch {
+                pendingPreservationURLs.formUnion(
+                    ((try? fileManager.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: nil)) ?? [])
+                        .filter { $0.lastPathComponent.hasPrefix("Workspace-") }
                 )
+                pendingPreservationURLs.insert(markerURL)
+                try? preservePendingDataLocked()
+                throw error
             }
-            try? fileManager.removeItem(at: markerURL)
-            try? fileManager.removeItem(at: directory)
-            removeWorkspaceDirectories(except: nil)
-            return WorkspaceSessionSnapshot(windows: windows)
+            let directory = workspaceURL(for: marker.workspaceID)
+            do {
+                let manifestURL = directory.appendingPathComponent("Manifest.json")
+                let manifest = try JSONDecoder().decode(
+                    Manifest.self,
+                    from: Data(contentsOf: manifestURL, options: .mappedIfSafe)
+                )
+                guard manifest.version == 1 else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                var skippedDocumentCount = 0
+                let windows = manifest.windows.compactMap { window -> WorkspaceWindowSnapshot? in
+                    let documents = window.documents.compactMap { document -> WorkspaceDocumentSnapshot? in
+                        do {
+                            guard document.contentFileName == (document.contentFileName as NSString).lastPathComponent else {
+                                throw CocoaError(.fileReadCorruptFile)
+                            }
+                            let contentURL = directory.appendingPathComponent(
+                                document.contentFileName
+                            )
+                            let data = try Data(
+                                contentsOf: contentURL,
+                                options: .mappedIfSafe
+                            )
+                            guard let text = String(data: data, encoding: .utf8) else {
+                                throw CocoaError(.fileReadInapplicableStringEncoding)
+                            }
+                            let baseline = document.canonicalPath.map {
+                                FileRevisionSnapshot(
+                                    identity: DocumentFileIdentity(
+                                        canonicalPath: $0,
+                                        resourceIdentifier: document.resourceIdentifier
+                                    ),
+                                    modificationDate: document.modificationDate,
+                                    fileSize: document.fileSize
+                                )
+                            }
+                            return WorkspaceDocumentSnapshot(
+                                documentID: document.documentID,
+                                text: text,
+                                sourceURL: document.sourcePath.map {
+                                    URL(fileURLWithPath: $0).standardizedFileURL
+                                },
+                                language: EditorLanguage(rawValue: document.language)
+                                    ?? .plainText,
+                                encoding: String.Encoding(
+                                    rawValue: document.encodingRawValue
+                                ),
+                                isDirty: document.isDirty,
+                                selectionRange: NSRange(
+                                    location: document.selectionLocation,
+                                    length: document.selectionLength
+                                ),
+                                scrollPositionRatio: CGFloat(
+                                    document.scrollPositionRatio
+                                ),
+                                isPreviewVisible: document.isPreviewVisible,
+                                fileRevisionSnapshot: baseline
+                            )
+                        } catch {
+                            skippedDocumentCount += 1
+                            return nil
+                        }
+                    }
+                    guard !documents.isEmpty else { return nil }
+                    let selection = window.selectedDocumentID.flatMap { selectedID in
+                        documents.contains { $0.documentID == selectedID } ? selectedID : documents.first?.documentID
+                    }
+                    return WorkspaceWindowSnapshot(
+                        documents: documents,
+                        selectedDocumentID: selection,
+                        isSidebarVisible: window.isSidebarVisible,
+                        frame: window.frame
+                    )
+                }
+                if skippedDocumentCount > 0 {
+                    pendingPreservationURLs.formUnion([directory, markerURL])
+                    try preservePendingDataLocked()
+                } else {
+                    try fileManager.removeItem(at: markerURL)
+                    try? fileManager.removeItem(at: directory)
+                }
+                removeWorkspaceDirectories(except: nil)
+                return LoadResult(
+                    snapshot: WorkspaceSessionSnapshot(windows: windows),
+                    skippedDocumentCount: skippedDocumentCount
+                )
+            } catch {
+                pendingPreservationURLs.formUnion([directory, markerURL])
+                try? preservePendingDataLocked()
+                throw error
+            }
         }
     }
 
-    func clear(completion: @escaping @MainActor @Sendable () -> Void) {
-        queue.async { [weak self] in
-            guard let self else {
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { completion() }
+    func clear(completion: @escaping @MainActor @Sendable (Result<Void, Error>) -> Void) {
+        queue.async { [self] in
+            let result = Result {
+                try preservePendingDataLocked()
+                if fileManager.fileExists(atPath: markerURL.path) {
+                    try fileManager.removeItem(at: markerURL)
                 }
-                return
+                removeWorkspaceDirectories(except: nil)
             }
-            try? fileManager.removeItem(at: markerURL)
-            removeWorkspaceDirectories(except: nil)
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { completion() }
+                MainActor.assumeIsolated { completion(result) }
             }
         }
     }
@@ -180,6 +231,7 @@ final class WorkspaceSessionStore: @unchecked Sendable {
     }
 
     private func saveLocked(_ snapshot: WorkspaceSessionSnapshot) throws {
+        try preservePendingDataLocked()
         try fileManager.createDirectory(
             at: rootURL,
             withIntermediateDirectories: true
@@ -252,6 +304,28 @@ final class WorkspaceSessionStore: @unchecked Sendable {
 
     private var markerURL: URL {
         rootURL.appendingPathComponent("CurrentWorkspace.json")
+    }
+
+    private func preservePendingDataLocked() throws {
+        guard !pendingPreservationURLs.isEmpty else { return }
+        let preservedURL = rootURL.appendingPathComponent("Preserved", isDirectory: true)
+        try fileManager.createDirectory(at: preservedURL, withIntermediateDirectories: true)
+        // Move payloads first. If the process exits mid-archive, the remaining
+        // marker still causes the next launch to report the interrupted restore.
+        let urls = pendingPreservationURLs.sorted {
+            if $0 == markerURL { return false }
+            if $1 == markerURL { return true }
+            return $0.path < $1.path
+        }
+        for url in urls {
+            if fileManager.fileExists(atPath: url.path) {
+                try fileManager.moveItem(
+                    at: url,
+                    to: preservedURL.appendingPathComponent("\(UUID().uuidString)-\(url.lastPathComponent)")
+                )
+            }
+            pendingPreservationURLs.remove(url)
+        }
     }
 
     private func workspaceURL(for workspaceID: UUID) -> URL {

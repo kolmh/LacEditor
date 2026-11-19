@@ -16,6 +16,8 @@ final class WindowManager: ObservableObject {
     let experimentSamples: ExperimentSampleLibrary?
     @Published private(set) var activeState: AppState?
     @Published private(set) var draggedDocumentID: UUID?
+    @Published private(set) var restorationMessage: String?
+    private(set) var restorationFilesURL: URL?
     /// Changes whenever the retained primary window is reopened. Sidebar
     /// scroll views use this identity to discard stale content offsets from a
     /// window that was closed after its last tab was removed.
@@ -78,8 +80,21 @@ final class WindowManager: ObservableObject {
         self.experimentSamples = experimentSamples
         self.preferences = preferences ?? AppPreferences()
         let recoverySnapshots = (try? recoveryStore?.startSession()) ?? []
+        var workspace: WorkspaceSessionSnapshot?
+        do {
+            if let result = try workspaceStore?.loadAndConsume() {
+                workspace = result.snapshot
+                if result.skippedDocumentCount > 0 {
+                    restorationMessage = "有 \(result.skippedDocumentCount) 个标签未能恢复，其他标签已恢复。原始恢复文件已保留。"
+                    restorationFilesURL = workspaceStore?.recoveryFilesURL
+                }
+            }
+        } catch {
+            restorationMessage = "工作区恢复失败，原始恢复文件已保留，请检查后再继续。\(error.localizedDescription)"
+            restorationFilesURL = workspaceStore?.recoveryFilesURL
+        }
         restoreInitialSession(
-            workspace: try? workspaceStore?.loadAndConsume(),
+            workspace: workspace,
             recoverySnapshots: recoverySnapshots
         )
         recentFilesCancellable = self.recentFiles.objectWillChange.sink { [weak self] in
@@ -95,6 +110,10 @@ final class WindowManager: ObservableObject {
     func takeRecoveredDocuments() -> [EditorDocument] {
         defer { recoveredDocuments.removeAll() }
         return recoveredDocuments
+    }
+
+    func dismissRestorationMessage() {
+        restorationMessage = nil
     }
 
     func preparePrimaryWindow(windowID: UUID, state: AppState) {
@@ -241,8 +260,7 @@ final class WindowManager: ObservableObject {
     func openNativeTab(from source: AppState? = nil) -> AppState {
         let source = source ?? activeState
         let parent = source?.hostWindow
-        let state = openNewWindow()
-        if let source { state.isSidebarVisible = source.isSidebarVisible }
+        let state = openNewWindow(initialSidebarVisibility: source?.isSidebarVisible)
         if let parent, parent.isVisible || parent.tabGroup?.windows.contains(where: { $0.isVisible }) == true, let window = state.hostWindow {
             parent.addTabbedWindow(window, ordered: .above)
             window.makeKeyAndOrderFront(nil)
@@ -253,14 +271,16 @@ final class WindowManager: ObservableObject {
     @discardableResult
     func openNewWindow(
         with document: EditorDocument? = nil,
-        near screenPoint: NSPoint? = nil
+        near screenPoint: NSPoint? = nil,
+        initialSidebarVisibility: Bool? = nil
     ) -> AppState {
         let windowID = UUID()
         let state = AppState(
             initialDocument: document,
             recentFiles: recentFiles,
             preferences: preferences,
-            recoveryStore: recoveryStore
+            recoveryStore: recoveryStore,
+            initialSidebarVisibility: initialSidebarVisibility
         )
         state.windowManager = self
         states[windowID] = state
@@ -668,6 +688,26 @@ final class WindowManager: ObservableObject {
     func requestApplicationTermination(
         completion: @escaping (Bool) -> Void
     ) {
+        if sidebarLibrary.persistenceError != nil, !sidebarLibrary.retrySaving() {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "收藏与分组尚未保存"
+            alert.informativeText = "本次整理仍保留在内存中。现在退出会丢失这些更改，你可以取消退出后重试保存。"
+            alert.addButton(withTitle: "取消退出")
+            alert.addButton(withTitle: "仍然退出")
+            present(alert) { [weak self] response in
+                guard let self, response == .alertSecondButtonReturn else {
+                    completion(false)
+                    return
+                }
+                self.continueApplicationTermination(completion: completion)
+            }
+            return
+        }
+        continueApplicationTermination(completion: completion)
+    }
+
+    private func continueApplicationTermination(completion: @escaping (Bool) -> Void) {
         switch preferences.workspaceExitBehavior {
         case .askToSave:
             confirmClosingAllWindows(completion: completion)
@@ -691,8 +731,18 @@ final class WindowManager: ObservableObject {
                 finishCleanRecovery(completion: completion)
                 return
             }
-            workspaceStore.clear { [weak self] in
-                guard let self, let recoveryStore else {
+            workspaceStore.clear { [weak self] result in
+                guard let self else {
+                    completion(false)
+                    return
+                }
+                if case let .failure(error) = result {
+                    self.terminationApproved = false
+                    self.presentWorkspaceSaveError(error)
+                    completion(false)
+                    return
+                }
+                guard let recoveryStore else {
                     completion(true)
                     return
                 }
@@ -955,7 +1005,8 @@ final class WindowManager: ObservableObject {
         recoverySnapshots: [DocumentRecoverySnapshot]
     ) {
         var recoveryByID = Dictionary(
-            uniqueKeysWithValues: recoverySnapshots.map { ($0.documentID, $0) }
+            recoverySnapshots.map { ($0.documentID, $0) },
+            uniquingKeysWith: DocumentRecoverySnapshot.newest
         )
         if let workspace, !workspace.windows.isEmpty {
             let restored = workspace.windows.map { window in
@@ -1001,7 +1052,9 @@ final class WindowManager: ObservableObject {
             recoveredDocuments = windows.first?.documents ?? []
             return
         }
-        let recovered = recoverySnapshots.map(Self.makeRecoveredDocument)
+        let recovered = recoveryByID.values
+            .sorted { $0.capturedAt < $1.capturedAt }
+            .map(Self.makeRecoveredDocument)
         recoveredDocuments = recovered
         if !recovered.isEmpty {
             initialRestoredWindow = RestoredWindow(
